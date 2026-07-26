@@ -100,7 +100,13 @@ func (m *model) activeDownloadView(ad *activeDownload) string {
 		b.WriteString(fmt.Sprintf("Elapsed: %s\n", formatDuration(elapsed)))
 		b.WriteString(fmt.Sprintf("ETA: %s\n", formatDuration(eta)))
 
-		barWidth := 50
+		barWidth := m.width - 6 // 2 for brackets, 4 for padding
+		if barWidth < 10 {
+			barWidth = 10
+		}
+		if barWidth > 80 {
+			barWidth = 80
+		}
 		filled := int(float64(barWidth) * float64(p.DownloadedSize) / float64(p.TotalSize))
 		if filled > barWidth {
 			filled = barWidth
@@ -128,7 +134,13 @@ func (m *model) activeDownloadView(ad *activeDownload) string {
 			statusChar = "⬇️"
 		}
 
-		chunkBarWidth := 20
+		chunkBarWidth := m.width/4 - 6
+		if chunkBarWidth < 10 {
+			chunkBarWidth = 10
+		}
+		if chunkBarWidth > 30 {
+			chunkBarWidth = 30
+		}
 		chunkFilled := int(float64(chunkBarWidth) * chunkPct / 100)
 		if chunkFilled > chunkBarWidth {
 			chunkFilled = chunkBarWidth

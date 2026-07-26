@@ -123,6 +123,47 @@ func (m *model) SetProgram(p *tea.Program) {
 	m.program = p
 }
 
+// resizeToWindow recalculates table column widths and height based on the
+// current terminal dimensions. Called on WindowSizeMsg.
+func (m *model) resizeToWindow() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+
+	// Fixed columns: # (4), Size (10), Progress (10), Speed (10), Status (10), _id (0)
+	// Borders/padding: 4 chars total
+	const fixedWidth = 4 + 10 + 10 + 10 + 10 + 4
+	fileWidth := m.width - fixedWidth
+	if fileWidth < 10 {
+		fileWidth = 10
+	}
+
+	m.table.SetColumns([]table.Column{
+		{Title: "#", Width: 4},
+		{Title: "File", Width: fileWidth},
+		{Title: "Size", Width: 10},
+		{Title: "Progress", Width: 10},
+		{Title: "Speed", Width: 10},
+		{Title: "Status", Width: 10},
+		{Title: "_id", Width: 0},
+	})
+	m.table.SetWidth(m.width - 4)
+
+	// Reserve rows for: title (1) + blank (1) + header (1) + help (2) + padding (2) = 7
+	tableHeight := m.height - 7
+	if tableHeight < 3 {
+		tableHeight = 3
+	}
+	m.table.SetHeight(tableHeight)
+
+	// Input width: leave some margin
+	inputWidth := m.width - 10
+	if inputWidth < 20 {
+		inputWidth = 20
+	}
+	m.urlInput.Width = inputWidth
+}
+
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
