@@ -12,7 +12,6 @@ func TestSaveRoundTripUsesInjectedPath(t *testing.T) {
 	cfg := Default()
 	cfg.SetPath(p)
 	cfg.GlobalSpeedLimit = 500 * 1024
-	cfg.PerDownloadSpeedLimit = 2 * 1024 * 1024
 
 	if err := cfg.Save(); err != nil {
 		t.Fatalf("save: %v", err)
@@ -31,16 +30,12 @@ func TestSaveRoundTripUsesInjectedPath(t *testing.T) {
 	if got.GlobalSpeedLimit != 500*1024 {
 		t.Errorf("GlobalSpeedLimit = %d, want %d", got.GlobalSpeedLimit, 500*1024)
 	}
-	if got.PerDownloadSpeedLimit != 2*1024*1024 {
-		t.Errorf("PerDownloadSpeedLimit = %d, want %d", got.PerDownloadSpeedLimit, 2*1024*1024)
-	}
 }
 
-func TestSpeedLimitsDefaultToUnlimited(t *testing.T) {
+func TestSpeedLimitDefaultsToUnlimited(t *testing.T) {
 	cfg := Default()
-	if cfg.GlobalSpeedLimit != 0 || cfg.PerDownloadSpeedLimit != 0 {
-		t.Errorf("default limits = %d/%d, want 0/0 (unlimited)",
-			cfg.GlobalSpeedLimit, cfg.PerDownloadSpeedLimit)
+	if cfg.GlobalSpeedLimit != 0 {
+		t.Errorf("default GlobalSpeedLimit = %d, want 0 (unlimited)", cfg.GlobalSpeedLimit)
 	}
 }
 
@@ -52,9 +47,8 @@ func TestMissingFieldsStayUnlimited(t *testing.T) {
 	if err := unmarshal(old, cfg); err != nil {
 		t.Fatalf("unmarshal legacy config: %v", err)
 	}
-	if cfg.GlobalSpeedLimit != 0 || cfg.PerDownloadSpeedLimit != 0 {
-		t.Errorf("legacy config limits = %d/%d, want 0/0",
-			cfg.GlobalSpeedLimit, cfg.PerDownloadSpeedLimit)
+	if cfg.GlobalSpeedLimit != 0 {
+		t.Errorf("legacy config GlobalSpeedLimit = %d, want 0", cfg.GlobalSpeedLimit)
 	}
 	if cfg.DownloadDir != "/tmp/dl" {
 		t.Errorf("DownloadDir = %q, want /tmp/dl", cfg.DownloadDir)

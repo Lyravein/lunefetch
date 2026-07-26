@@ -48,13 +48,13 @@ func (m *model) listView() string {
 	b.WriteString("\n\n")
 
 	// Tampilkan speed limit aktif kalau ada yang di-set.
-	if m.globalLimit > 0 || m.perDownloadLimit > 0 {
+	if m.globalLimit > 0 || len(m.itemLimits) > 0 {
 		parts := []string{}
 		if m.globalLimit > 0 {
 			parts = append(parts, "global "+formatSpeedLimit(m.globalLimit))
 		}
-		if m.perDownloadLimit > 0 {
-			parts = append(parts, "per-dl "+formatSpeedLimit(m.perDownloadLimit))
+		if n := len(m.itemLimits); n > 0 {
+			parts = append(parts, fmt.Sprintf("%d file dibatasi", n))
 		}
 		b.WriteString(helpStyle.Render("  Limit: " + strings.Join(parts, "  |  ")))
 		b.WriteString("\n")
@@ -238,29 +238,54 @@ func (m *model) speedLimitView() string {
 
 	// Tampilkan kedua scope sekaligus, tandai yang sedang diedit, supaya jelas
 	// mana yang akan tersimpan saat enter.
-	globalMark, perMark := "  ", "> "
+	globalMark, selMark := "  ", "> "
 	if m.speedScope == scopeGlobal {
-		globalMark, perMark = "> ", "  "
+		globalMark, selMark = "> ", "  "
 	}
-	b.WriteString(globalMark + "Global       " + formatSpeedLimit(m.globalLimit) + "\n")
-	b.WriteString(helpStyle.Render("               total bandwidth semua download aktif"))
+
+	b.WriteString(globalMark + "Global   " + formatSpeedLimit(m.globalLimit) + "\n")
+	b.WriteString(helpStyle.Render("           total bandwidth semua download"))
 	b.WriteString("\n")
-	b.WriteString(perMark + "Per-Download " + formatSpeedLimit(m.perDownloadLimit) + "\n")
-	b.WriteString(helpStyle.Render("               batas tiap download secara individual"))
+
+	if m.hasSpeedTarget() {
+		b.WriteString(selMark + "File     " + formatSpeedLimit(m.itemLimits[m.speedTargetID]) + "\n")
+		b.WriteString(helpStyle.Render("           hanya " + truncate(m.speedTargetName, 40)))
+	} else {
+		b.WriteString(helpStyle.Render("  File     (pilih download dulu di list)"))
+		b.WriteString("\n")
+		b.WriteString(helpStyle.Render("           hanya berlaku untuk yang belum selesai"))
+	}
 	b.WriteString("\n\n")
 
-	scopeName := "global"
-	if m.speedScope == scopePerDownload {
-		scopeName = "per-download"
+	if m.speedScope == scopeGlobal {
+		b.WriteString("Limit global baru:\n")
+	} else {
+		b.WriteString("Limit untuk " + truncate(m.speedTargetName, 40) + ":\n")
 	}
-	b.WriteString("Limit " + scopeName + " baru:\n")
 	b.WriteString(m.speedInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  Format: 500k, 2m, 1.5m, 1g  |  kosong = unlimited"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  tab: Ganti scope  |  enter: Simpan  |  esc: Batal"))
+	if m.hasSpeedTarget() {
+		b.WriteString(helpStyle.Render("  tab: Global / File  |  enter: Simpan  |  esc: Batal"))
+	} else {
+		b.WriteString(helpStyle.Render("  enter: Simpan  |  esc: Batal"))
+	}
 
 	return b.String()
+}
+
+// truncate memendekkan s ke maksimal n karakter, menambahkan elipsis kalau
+// terpotong, supaya nama file panjang tidak merusak layout.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		return string(r[:n])
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func (m *model) duplicateView() string {

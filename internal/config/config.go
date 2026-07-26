@@ -16,16 +16,15 @@ type ChunkRules struct {
 }
 
 type Config struct {
-	DownloadDir           string     `yaml:"download_dir"`
-	MaxRetries            int        `yaml:"max_retries"`
-	Timeout               int        `yaml:"timeout"`
-	ChunkRules            ChunkRules `yaml:"chunk_rules"`
-	SmallSize             int64      `yaml:"small_size"`
-	MediumSize            int64      `yaml:"medium_size"`
-	LargeSize             int64      `yaml:"large_size"`
-	MaxConcurrent         int        `yaml:"max_concurrent_downloads"`
-	GlobalSpeedLimit      int64      `yaml:"global_speed_limit"`       // bytes/sec, 0 = unlimited
-	PerDownloadSpeedLimit int64      `yaml:"per_download_speed_limit"` // bytes/sec, 0 = unlimited
+	DownloadDir      string     `yaml:"download_dir"`
+	MaxRetries       int        `yaml:"max_retries"`
+	Timeout          int        `yaml:"timeout"`
+	ChunkRules       ChunkRules `yaml:"chunk_rules"`
+	SmallSize        int64      `yaml:"small_size"`
+	MediumSize       int64      `yaml:"medium_size"`
+	LargeSize        int64      `yaml:"large_size"`
+	MaxConcurrent    int        `yaml:"max_concurrent_downloads"`
+	GlobalSpeedLimit int64      `yaml:"global_speed_limit"` // bytes/sec, 0 = unlimited
 
 	// path menyimpan lokasi file config supaya Save() menulis ke tempat yang
 	// sama dengan asal Load(). Tidak diserialisasi.

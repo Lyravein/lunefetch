@@ -74,6 +74,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case downloadDoneMsg:
 		delete(m.activeDownloads, msg.id)
+		// Download selesai (atau gagal permanen) — limit individualnya tidak
+		// relevan lagi. Pause tidak lewat sini, jadi limit download yang
+		// di-pause tetap tersimpan untuk resume.
+		delete(m.itemLimits, msg.id)
 		m.loadDownloads()
 		return m, nil
 
@@ -207,9 +211,10 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "l", "L":
-		// Buka page speed limit. Scope (global / per-download) di-toggle
-		// dengan tab di dalam page — ctrl+l dihindari karena banyak terminal
+		// Buka page speed limit. Target per-download di-capture sekarang dari
+		// baris yang di-highlight; ctrl+l dihindari karena banyak terminal
 		// memakainya untuk clear screen.
+		m.captureSpeedTarget()
 		m.speedScope = scopeGlobal
 		m.speedInput.SetValue(speedInputValue(m.globalLimit))
 		m.speedInput.Focus()
@@ -232,6 +237,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				ad.downloader.Cancel()
 				delete(m.activeDownloads, id)
 			}
+			delete(m.itemLimits, id)
 			// Delete both the .tmp file (in-progress) and the final file (completed).
 			if dl, err := m.state.GetDownload(id); err == nil && dl != nil {
 				ext := filepath.Ext(dl.Filename)
@@ -416,6 +422,35 @@ func (m *model) handleSetFolderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// captureSpeedTarget mencatat download yang di-highlight sebagai target limit
+// per-download. Kalau tidak ada baris yang dipilih, atau download-nya sudah
+// selesai/gagal, target dikosongkan sehingga scope per-download tidak bisa
+// dipakai dan user jatuh ke scope global saja.
+func (m *model) captureSpeedTarget() {
+	m.speedTargetID = 0
+	m.speedTargetName = ""
+
+	id := m.selectedRowID()
+	if id == 0 {
+		return
+	}
+	for i := range m.downloads {
+		d := &m.downloads[i]
+		if d.ID != id {
+			continue
+		}
+		if !limitableStatus(d.Status) {
+			return
+		}
+		m.speedTargetID = d.ID
+		m.speedTargetName = d.Filename
+		return
+	}
+}
+
+// hasSpeedTarget melaporkan apakah scope per-download tersedia.
+func (m *model) hasSpeedTarget() bool { return m.speedTargetID != 0 }
+
 func (m *model) handleSpeedLimitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -423,11 +458,14 @@ func (m *model) handleSpeedLimitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "tab", "shift+tab":
-		// Toggle antara limit global dan per-download. Nilai input diganti ke
-		// limit milik scope yang baru supaya user tidak salah simpan.
+		// Toggle antara limit global dan limit download terpilih. Kalau tidak
+		// ada download yang bisa dibatasi, scope tetap di global.
+		if !m.hasSpeedTarget() {
+			return m, nil
+		}
 		if m.speedScope == scopeGlobal {
-			m.speedScope = scopePerDownload
-			m.speedInput.SetValue(speedInputValue(m.perDownloadLimit))
+			m.speedScope = scopeSelected
+			m.speedInput.SetValue(speedInputValue(m.itemLimits[m.speedTargetID]))
 		} else {
 			m.speedScope = scopeGlobal
 			m.speedInput.SetValue(speedInputValue(m.globalLimit))
@@ -448,34 +486,51 @@ func (m *model) handleSpeedLimitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Global limiter dibagi ke semua download, jadi update rate-nya
 			// langsung berlaku ke download yang sedang berjalan.
 			m.globalLimiter.SetRate(limit)
-		} else {
-			m.perDownloadLimit = limit
-			m.cfg.PerDownloadSpeedLimit = limit
-			// Terapkan ke download yang sedang aktif juga.
-			for _, ad := range m.activeDownloads {
-				if ad.done.Load() {
-					continue
-				}
-				if limit > 0 {
-					ad.downloader.SetLimiter(core.NewLimiter(limit))
-				} else {
-					ad.downloader.SetLimiter(nil)
-				}
+			if err := m.cfg.Save(); err != nil {
+				m.err = err
 			}
+		} else {
+			m.applyItemLimit(m.speedTargetID, limit)
 		}
 
-		if err := m.cfg.Save(); err != nil {
-			m.err = err
-		}
 		// Baris "Limit:" muncul/hilang, jadi tinggi tabel perlu dihitung ulang.
 		m.resizeToWindow()
 		m.currentPage = pageList
+		m.updateTable()
 		return m, nil
 	}
 
 	var cmd tea.Cmd
 	m.speedInput, cmd = m.speedInput.Update(msg)
 	return m, cmd
+}
+
+// applyItemLimit menyimpan limit untuk satu download dan langsung menerapkannya
+// kalau download itu sedang jalan. Download lain tidak disentuh — inilah
+// bedanya dengan limit global.
+//
+// Limit disimpan di map supaya tetap berlaku saat download yang masih queued
+// atau paused dijalankan/di-resume nanti (startDownload membacanya kembali).
+func (m *model) applyItemLimit(id, limit int64) {
+	if id == 0 {
+		return
+	}
+
+	if limit > 0 {
+		m.itemLimits[id] = limit
+	} else {
+		delete(m.itemLimits, id)
+	}
+
+	ad, ok := m.activeDownloads[id]
+	if !ok || ad.done.Load() {
+		return
+	}
+	if limit > 0 {
+		ad.downloader.SetLimiter(core.NewLimiter(limit))
+	} else {
+		ad.downloader.SetLimiter(nil)
+	}
 }
 
 func (m *model) handleDuplicateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -517,6 +572,7 @@ func (m *model) handleDuplicateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				ad.downloader.Cancel()
 				delete(m.activeDownloads, oldID)
 			}
+			delete(m.itemLimits, oldID)
 			if dl, err := m.state.GetDownload(oldID); err == nil && dl != nil {
 				ext := filepath.Ext(dl.Filename)
 				baseName := dl.Filename[:len(dl.Filename)-len(ext)]

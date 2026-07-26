@@ -102,11 +102,23 @@ type model struct {
 	pendingFilename string // filename override (from rename page)
 	pendingFolder   string // folder override (from set-folder page)
 
-	globalLimiter    *core.Limiter // shared by every active download
-	globalLimit      int64         // bytes/sec, 0 = unlimited
-	perDownloadLimit int64         // bytes/sec applied to each new download, 0 = unlimited
-	speedInput       textinput.Model
-	speedScope       speedScope // which limit the speed page is editing
+	globalLimiter *core.Limiter // shared by every active download
+	globalLimit   int64         // bytes/sec, 0 = unlimited
+
+	// itemLimits menyimpan limit per download, dikunci dengan ID download.
+	// Hanya berisi entri untuk download yang benar-benar dibatasi; download
+	// tanpa entri jalan tanpa limit individual. Entri dihapus saat download
+	// selesai atau dibatalkan supaya map tidak bocor.
+	itemLimits map[int64]int64
+
+	speedInput textinput.Model
+	speedScope speedScope // which limit the speed page is editing
+
+	// speedTarget adalah download yang akan dibatasi kalau scope-nya
+	// scopeSelected. Di-capture saat page dibuka supaya nilainya tidak
+	// berubah kalau tabel ter-refresh di belakang.
+	speedTargetID   int64
+	speedTargetName string
 }
 
 // speedScope selects which limit the speed-limit page edits.
@@ -114,8 +126,20 @@ type speedScope int
 
 const (
 	scopeGlobal speedScope = iota
-	scopePerDownload
+	// scopeSelected membatasi hanya download yang di-highlight di list.
+	scopeSelected
 )
+
+// limitableStatus melaporkan apakah download dengan status ini masih bisa
+// dibatasi. Download yang sudah selesai atau gagal tidak akan menarik
+// bandwidth lagi, jadi limit untuk mereka tidak ada artinya.
+func limitableStatus(status string) bool {
+	switch status {
+	case "queued", "paused", "downloading", "retrying", "scheduled":
+		return true
+	}
+	return false
+}
 
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	t := table.New(
@@ -174,20 +198,20 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	m := &model{
-		state:            sm,
-		cfg:              cfg,
-		activeDownloads:  make(map[int64]*activeDownload),
-		currentPage:      pageList,
-		table:            t,
-		urlInput:         ti,
-		scheduleInput:    si,
-		renameInput:      ri,
-		folderInput:      fi,
-		speedInput:       spd,
-		spinner:          sp,
-		globalLimit:      cfg.GlobalSpeedLimit,
-		perDownloadLimit: cfg.PerDownloadSpeedLimit,
-		globalLimiter:    core.NewLimiter(cfg.GlobalSpeedLimit),
+		state:           sm,
+		cfg:             cfg,
+		activeDownloads: make(map[int64]*activeDownload),
+		currentPage:     pageList,
+		table:           t,
+		urlInput:        ti,
+		scheduleInput:   si,
+		renameInput:     ri,
+		folderInput:     fi,
+		speedInput:      spd,
+		spinner:         sp,
+		globalLimit:     cfg.GlobalSpeedLimit,
+		globalLimiter:   core.NewLimiter(cfg.GlobalSpeedLimit),
+		itemLimits:      make(map[int64]int64),
 	}
 
 	// Wire queue manager — startDownload is called by the queue when a slot opens.
@@ -237,7 +261,7 @@ func (m *model) resizeToWindow() {
 	// Reserve rows for: title (1) + blank (1) + header (1) + help (2) + padding (2) = 7
 	// plus 1 for the second help line, and 1 more when the limit line shows.
 	reserved := 8
-	if m.globalLimit > 0 || m.perDownloadLimit > 0 {
+	if m.globalLimit > 0 || len(m.itemLimits) > 0 {
 		reserved++
 	}
 	tableHeight := m.height - reserved
@@ -496,11 +520,12 @@ func (m *model) startDownload(id int64) {
 		m.state.UpdateChunkProgress(id, chunkIndex, downloadedSize, status)
 	})
 
-	// Global limiter dibagi ke semua download; per-download limiter dibuat baru
-	// untuk tiap download supaya masing-masing dapat kuota sendiri.
+	// Global limiter dibagi ke semua download. Limit individual hanya dipasang
+	// kalau download ini memang punya entri sendiri — download lain tidak
+	// terpengaruh.
 	downloader.SetGlobalLimiter(m.globalLimiter)
-	if m.perDownloadLimit > 0 {
-		downloader.SetLimiter(core.NewLimiter(m.perDownloadLimit))
+	if lim := m.itemLimits[id]; lim > 0 {
+		downloader.SetLimiter(core.NewLimiter(lim))
 	}
 
 	ad := &activeDownload{
