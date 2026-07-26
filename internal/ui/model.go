@@ -170,6 +170,9 @@ func (m *model) resizeToWindow() {
 	if fileWidth < 10 {
 		fileWidth = 10
 	}
+	if fileWidth > 30 {
+		fileWidth = 30
+	}
 
 	m.table.SetColumns([]table.Column{
 		{Title: "#", Width: 4},
