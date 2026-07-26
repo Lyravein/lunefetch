@@ -585,19 +585,6 @@ func (m *model) createDownloadWithOptsCmd(url, filenameOverride, folder string) 
 			filename = filenameOverride
 		}
 
-		// Add suffix if filename already exists in DB (add-anyway duplicate).
-		if existing, err := m.state.FindByURL(url); err == nil && existing != nil && existing.Filename == filename {
-			ext := filepath.Ext(filename)
-			base := filename[:len(filename)-len(ext)]
-			for i := 1; i < 1000; i++ {
-				candidate := fmt.Sprintf("%s #%d%s", base, i, ext)
-				if dup, _ := m.state.FindByURL(url); dup == nil || dup.Filename != candidate {
-					filename = candidate
-					break
-				}
-			}
-		}
-
 		downloadDir := folder
 		if downloadDir == "" {
 			downloadDir = m.cfg.DownloadDir
