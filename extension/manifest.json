@@ -15,16 +15,12 @@
   },
 
   "browser_action": {
-    "default_icon": {
-      "48": "icons/icon-48.png",
-      "96": "icons/icon-96.png"
-    },
     "default_title": "Lunefetch"
   },
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "download-manager@lyravein",
+      "id": "lunefetch@lyravein",
       "strict_min_version": "91.0"
     }
   }
