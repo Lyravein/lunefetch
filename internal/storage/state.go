@@ -19,6 +19,8 @@ type DownloadRecord struct {
 	Status         string
 	SupportsRanges bool
 	NumChunks      int
+	QueuePosition  sql.NullInt64  // NULL = not in queue
+	ScheduledAt    sql.NullString // "HH:MM", NULL = not scheduled
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -70,6 +72,8 @@ func (sm *StateManager) migrate() error {
 		status TEXT NOT NULL DEFAULT 'pending',
 		supports_ranges BOOLEAN NOT NULL DEFAULT 0,
 		num_chunks INTEGER NOT NULL DEFAULT 1,
+		queue_position INTEGER,
+		scheduled_at TEXT,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
@@ -91,16 +95,30 @@ func (sm *StateManager) migrate() error {
 
 	CREATE INDEX IF NOT EXISTS idx_chunks_download_id ON chunks(download_id);
 	CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
+	CREATE INDEX IF NOT EXISTS idx_downloads_queue_position ON downloads(queue_position);
 	`
 
-	_, err := sm.db.Exec(schema)
-	return err
+	if _, err := sm.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Additive migrations for existing DBs that don't have the new columns yet.
+	migrations := []string{
+		`ALTER TABLE downloads ADD COLUMN queue_position INTEGER`,
+		`ALTER TABLE downloads ADD COLUMN scheduled_at TEXT`,
+	}
+	for _, m := range migrations {
+		// Ignore "duplicate column" errors — means migration already applied.
+		sm.db.Exec(m) //nolint:errcheck
+	}
+
+	return nil
 }
 
 func (sm *StateManager) CreateDownload(url, filename string, totalSize int64, supportsRanges bool, numChunks int) (int64, error) {
 	result, err := sm.db.Exec(
 		`INSERT INTO downloads (url, filename, total_size, supports_ranges, num_chunks, status)
-		 VALUES (?, ?, ?, ?, ?, 'downloading')`,
+		 VALUES (?, ?, ?, ?, ?, 'pending')`,
 		url, filename, totalSize, supportsRanges, numChunks,
 	)
 	if err != nil {
@@ -163,17 +181,167 @@ func (sm *StateManager) UpdateDownloadStatus(id int64, status string) error {
 	return err
 }
 
-func (sm *StateManager) GetDownload(id int64) (*DownloadRecord, error) {
-	row := sm.db.QueryRow(
-		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks, created_at, updated_at
-		 FROM downloads WHERE id = ?`, id,
+// SetQueuePosition sets or clears the queue position of a download.
+// Pass nil to remove it from the queue.
+func (sm *StateManager) SetQueuePosition(id int64, pos *int64) error {
+	_, err := sm.db.Exec(
+		`UPDATE downloads SET queue_position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		pos, id,
 	)
+	return err
+}
 
+// SetScheduledAt sets or clears the scheduled time ("HH:MM") for a download.
+// Pass nil to remove the schedule.
+func (sm *StateManager) SetScheduledAt(id int64, at *string) error {
+	_, err := sm.db.Exec(
+		`UPDATE downloads SET scheduled_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		at, id,
+	)
+	return err
+}
+
+// NextInQueue returns the download with the lowest queue_position that has
+// status "queued", or nil if the queue is empty.
+func (sm *StateManager) NextInQueue() (*DownloadRecord, error) {
+	row := sm.db.QueryRow(
+		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
+		        queue_position, scheduled_at, created_at, updated_at
+		 FROM downloads
+		 WHERE status = 'queued'
+		 ORDER BY queue_position ASC
+		 LIMIT 1`,
+	)
 	rec := &DownloadRecord{}
 	err := row.Scan(
 		&rec.ID, &rec.URL, &rec.Filename, &rec.TotalSize,
 		&rec.DownloadedSize, &rec.Status, &rec.SupportsRanges,
-		&rec.NumChunks, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.NumChunks, &rec.QueuePosition, &rec.ScheduledAt,
+		&rec.CreatedAt, &rec.UpdatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("next in queue: %w", err)
+	}
+	return rec, nil
+}
+
+// ShiftQueuePositions compacts queue_position values so there are no gaps.
+func (sm *StateManager) ShiftQueuePositions() error {
+	rows, err := sm.db.Query(
+		`SELECT id FROM downloads WHERE status = 'queued' ORDER BY queue_position ASC`,
+	)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	tx, err := sm.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for i, id := range ids {
+		pos := int64(i + 1)
+		if _, err := tx.Exec(
+			`UPDATE downloads SET queue_position = ? WHERE id = ?`, pos, id,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MoveQueuePosition moves a download up (-1) or down (+1) in the queue.
+func (sm *StateManager) MoveQueuePosition(id int64, delta int) error {
+	if err := sm.ShiftQueuePositions(); err != nil {
+		return err
+	}
+
+	row := sm.db.QueryRow(`SELECT queue_position FROM downloads WHERE id = ?`, id)
+	var pos sql.NullInt64
+	if err := row.Scan(&pos); err != nil || !pos.Valid {
+		return nil // not in queue, nothing to do
+	}
+
+	newPos := pos.Int64 + int64(delta)
+	if newPos < 1 {
+		newPos = 1
+	}
+
+	// Swap with whoever is at newPos.
+	tx, err := sm.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`UPDATE downloads SET queue_position = queue_position - ? WHERE queue_position = ? AND id != ?`,
+		delta, newPos, id,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE downloads SET queue_position = ? WHERE id = ?`, newPos, id,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListScheduledReady returns downloads with scheduled_at = HH:MM (current time)
+// that are still in 'scheduled' status.
+func (sm *StateManager) ListScheduledReady(hhmm string) ([]DownloadRecord, error) {
+	rows, err := sm.db.Query(
+		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
+		        queue_position, scheduled_at, created_at, updated_at
+		 FROM downloads
+		 WHERE status = 'scheduled' AND scheduled_at = ?`,
+		hhmm,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []DownloadRecord
+	for rows.Next() {
+		var d DownloadRecord
+		if err := rows.Scan(
+			&d.ID, &d.URL, &d.Filename, &d.TotalSize, &d.DownloadedSize,
+			&d.Status, &d.SupportsRanges, &d.NumChunks,
+			&d.QueuePosition, &d.ScheduledAt, &d.CreatedAt, &d.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, d)
+	}
+	return result, rows.Err()
+}
+
+func scanDownload(row *sql.Row) (*DownloadRecord, error) {
+	rec := &DownloadRecord{}
+	err := row.Scan(
+		&rec.ID, &rec.URL, &rec.Filename, &rec.TotalSize,
+		&rec.DownloadedSize, &rec.Status, &rec.SupportsRanges,
+		&rec.NumChunks, &rec.QueuePosition, &rec.ScheduledAt,
+		&rec.CreatedAt, &rec.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -181,8 +349,16 @@ func (sm *StateManager) GetDownload(id int64) (*DownloadRecord, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan download: %w", err)
 	}
-
 	return rec, nil
+}
+
+func (sm *StateManager) GetDownload(id int64) (*DownloadRecord, error) {
+	row := sm.db.QueryRow(
+		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
+		        queue_position, scheduled_at, created_at, updated_at
+		 FROM downloads WHERE id = ?`, id,
+	)
+	return scanDownload(row)
 }
 
 func (sm *StateManager) GetChunks(downloadID int64) ([]ChunkRecord, error) {
@@ -210,8 +386,11 @@ func (sm *StateManager) GetChunks(downloadID int64) ([]ChunkRecord, error) {
 
 func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 	rows, err := sm.db.Query(
-		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks, created_at, updated_at
-		 FROM downloads ORDER BY created_at DESC`,
+		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
+		        queue_position, scheduled_at, created_at, updated_at
+		 FROM downloads ORDER BY
+		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END ASC NULLS LAST,
+		   created_at DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list downloads: %w", err)
@@ -221,9 +400,11 @@ func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 	var downloads []DownloadRecord
 	for rows.Next() {
 		var d DownloadRecord
-		if err := rows.Scan(&d.ID, &d.URL, &d.Filename, &d.TotalSize,
-			&d.DownloadedSize, &d.Status, &d.SupportsRanges, &d.NumChunks,
-			&d.CreatedAt, &d.UpdatedAt); err != nil {
+		if err := rows.Scan(
+			&d.ID, &d.URL, &d.Filename, &d.TotalSize, &d.DownloadedSize,
+			&d.Status, &d.SupportsRanges, &d.NumChunks,
+			&d.QueuePosition, &d.ScheduledAt, &d.CreatedAt, &d.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan download: %w", err)
 		}
 		downloads = append(downloads, d)
@@ -235,6 +416,11 @@ func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 func (sm *StateManager) DeleteDownload(id int64) error {
 	_, err := sm.db.Exec(`DELETE FROM downloads WHERE id = ?`, id)
 	return err
+}
+
+// DB exposes the raw *sql.DB for packages that need direct queries (e.g. queue).
+func (sm *StateManager) DB() *sql.DB {
+	return sm.db
 }
 
 func (sm *StateManager) Close() error {

@@ -16,6 +16,8 @@ func (m *model) View() string {
 		return m.detailView()
 	case pageAddURL:
 		return m.addURLView()
+	case pageSchedule:
+		return m.scheduleView()
 	}
 	return ""
 }
@@ -23,7 +25,7 @@ func (m *model) View() string {
 func (m *model) listView() string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render(" Download Manager "))
+	b.WriteString(titleStyle.Render(" Lunefetch "))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -36,7 +38,7 @@ func (m *model) listView() string {
 	b.WriteString("\n\n")
 
 	b.WriteString(helpStyle.Render(
-		"  n: New Download  |  r: Resume  |  p: Pause  |  d: Delete  |  enter: Detail  |  q: Quit",
+		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
 	))
 
 	return b.String()
@@ -63,6 +65,10 @@ func (m *model) downloadInfoView(d *storage.DownloadRecord) string {
 	b.WriteString(fmt.Sprintf("File:   %s\n", d.Filename))
 	b.WriteString(fmt.Sprintf("Size:   %s\n", formatSize(d.TotalSize)))
 	b.WriteString(fmt.Sprintf("Status: %s\n", d.Status))
+
+	if d.ScheduledAt.Valid {
+		b.WriteString(fmt.Sprintf("Scheduled: %s\n", d.ScheduledAt.String))
+	}
 
 	if d.TotalSize > 0 {
 		pct := float64(d.DownloadedSize) / float64(d.TotalSize) * 100
@@ -163,6 +169,18 @@ func (m *model) addURLView() string {
 	b.WriteString("\n\n")
 	b.WriteString("Enter URL:\n")
 	b.WriteString(m.urlInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("  enter: Confirm  |  esc: Cancel"))
+
+	return b.String()
+}
+
+func (m *model) scheduleView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(" Schedule Download "))
+	b.WriteString("\n\n")
+	b.WriteString("Set start time (HH:MM):\n")
+	b.WriteString(m.scheduleInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  enter: Confirm  |  esc: Cancel"))
 

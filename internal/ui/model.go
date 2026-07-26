@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lyravein/lunefetch/internal/config"
 	"github.com/lyravein/lunefetch/internal/core"
+	"github.com/lyravein/lunefetch/internal/queue"
 	"github.com/lyravein/lunefetch/internal/storage"
 )
 
@@ -49,22 +50,27 @@ const (
 	pageList page = iota
 	pageDetail
 	pageAddURL
+	pageSchedule
 )
 
 type model struct {
 	state           *storage.StateManager
 	cfg             *config.Config
 	program         *tea.Program
+	queue           *queue.Manager
 	downloads       []storage.DownloadRecord
 	activeDownloads map[int64]*activeDownload
 	currentPage     page
 	table           table.Model
 	selectedID      int64
 	urlInput        textinput.Model
+	scheduleInput   textinput.Model
 	spinner         spinner.Model
 	err             error
 	width           int
 	height          int
+	lastClick       time.Time // for double-click detection
+	lastClickRow    int
 }
 
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
@@ -100,6 +106,11 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	ti.CharLimit = 500
 	ti.Width = 60
 
+	si := textinput.New()
+	si.Placeholder = "HH:MM (e.g. 14:30)"
+	si.CharLimit = 5
+	si.Width = 20
+
 	sp := spinner.New()
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
@@ -110,8 +121,12 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 		currentPage:     pageList,
 		table:           t,
 		urlInput:        ti,
+		scheduleInput:   si,
 		spinner:         sp,
 	}
+
+	// Wire queue manager — startDownload is called by the queue when a slot opens.
+	m.queue = queue.NewManager(sm, cfg.MaxConcurrent, m.startDownload)
 
 	m.loadDownloads()
 	return m
@@ -239,7 +254,7 @@ func format3Digits(n int64) string {
 
 func formatFloat(f float64) string {
 	if f < 10 {
-		return formatIntSmall(int64(f * 100))[:1] + "." + formatIntSmall(int64(f * 100))[1:]
+		return formatIntSmall(int64(f*100))[:1] + "." + formatIntSmall(int64(f*100))[1:]
 	}
 	return formatIntSmall(int64(f)) + "." + formatIntSmall(int64(f*10)%10)
 }
@@ -289,6 +304,10 @@ func (m *model) updateTable() {
 			if d.TotalSize > 0 {
 				progress = formatFloat(float64(d.DownloadedSize)/float64(d.TotalSize)*100) + "%"
 			}
+		} else if d.Status == "queued" {
+			status = fmt.Sprintf("Q#%d", d.QueuePosition.Int64)
+		} else if d.Status == "scheduled" {
+			status = "Sched " + d.ScheduledAt.String
 		}
 
 		rows = append(rows, table.Row{
@@ -304,6 +323,8 @@ func (m *model) updateTable() {
 	m.table.SetRows(rows)
 }
 
+// startDownload builds and launches a downloader for the given ID.
+// It is called directly (for resume) or by the queue manager.
 func (m *model) startDownload(id int64) {
 	download, err := m.state.GetDownload(id)
 	if err != nil || download == nil {
@@ -365,8 +386,9 @@ func (m *model) startDownload(id int64) {
 			}
 		}
 		ad.done.Store(true)
-		// Notify the TUI to refresh immediately so status updates without
-		// waiting for the next tick.
+		// Notify the queue that a slot is now free.
+		m.queue.OnDone(id)
+		// Notify the TUI to refresh immediately.
 		if m.program != nil {
 			m.program.Send(downloadDoneMsg{id: id})
 		}

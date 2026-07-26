@@ -16,13 +16,14 @@ type ChunkRules struct {
 }
 
 type Config struct {
-	DownloadDir  string     `yaml:"download_dir"`
-	MaxRetries   int        `yaml:"max_retries"`
-	Timeout      int        `yaml:"timeout"`
-	ChunkRules   ChunkRules `yaml:"chunk_rules"`
-	SmallSize    int64      `yaml:"small_size"`
-	MediumSize   int64      `yaml:"medium_size"`
-	LargeSize    int64      `yaml:"large_size"`
+	DownloadDir        string     `yaml:"download_dir"`
+	MaxRetries         int        `yaml:"max_retries"`
+	Timeout            int        `yaml:"timeout"`
+	ChunkRules         ChunkRules `yaml:"chunk_rules"`
+	SmallSize          int64      `yaml:"small_size"`
+	MediumSize         int64      `yaml:"medium_size"`
+	LargeSize          int64      `yaml:"large_size"`
+	MaxConcurrent      int        `yaml:"max_concurrent_downloads"`
 }
 
 func Default() *Config {
@@ -36,9 +37,10 @@ func Default() *Config {
 			Large:  16,
 			XLarge: 32,
 		},
-		SmallSize:  1 << 30,         // 1 GB
-		MediumSize: 5 << 30,         // 5 GB
-		LargeSize:  100 * (1 << 30), // 100 GB
+		SmallSize:     1 << 30,         // 1 GB
+		MediumSize:    5 << 30,         // 5 GB
+		LargeSize:     100 * (1 << 30), // 100 GB
+		MaxConcurrent: 2,
 	}
 }
 

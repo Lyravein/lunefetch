@@ -1,8 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -13,6 +16,10 @@ import (
 type downloadReadyMsg struct{ id int64 }
 type downloadErrMsg struct{ err error }
 type downloadDoneMsg struct{ id int64 }
+
+// ScheduledReadyMsg is sent by the scheduler goroutine when a scheduled
+// download's time has arrived.
+type ScheduledReadyMsg struct{ ID int64 }
 
 // AddURLMsg is sent by the HTTP API server when the browser extension
 // forwards a URL to download.
@@ -28,6 +35,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKeyMsg(msg)
 
+	case tea.MouseMsg:
+		return m.handleMouseMsg(msg)
+
 	case tickMsg:
 		m.updateTable()
 		return m, m.refreshCmd
@@ -38,7 +48,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case downloadReadyMsg:
-		m.startDownload(msg.id)
+		// Route through queue — may start immediately or enqueue.
+		m.queue.TryStart(msg.id) //nolint:errcheck
 		m.loadDownloads()
 		return m, nil
 
@@ -51,8 +62,66 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadDownloads()
 		return m, nil
 
+	case ScheduledReadyMsg:
+		// Scheduled time arrived — route through queue.
+		m.queue.TryStart(msg.ID) //nolint:errcheck
+		m.loadDownloads()
+		return m, nil
+
 	case AddURLMsg:
 		return m, m.createDownloadCmd(msg.URL)
+	}
+
+	return m, nil
+}
+
+func (m *model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.currentPage != pageList {
+		return m, nil
+	}
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		m.table.MoveUp(1)
+		return m, nil
+
+	case tea.MouseButtonWheelDown:
+		m.table.MoveDown(1)
+		return m, nil
+
+	case tea.MouseButtonLeft:
+		if msg.Action != tea.MouseActionRelease {
+			return m, nil
+		}
+		// Determine which row was clicked based on Y position.
+		// Table starts at row 2 (title + blank line), header is row 0 of table.
+		// Rows start after header, so offset = 3 (title + blank + header).
+		const rowOffset = 3
+		clickedRow := msg.Y - rowOffset
+		rows := m.table.Rows()
+		if clickedRow < 0 || clickedRow >= len(rows) {
+			return m, nil
+		}
+
+		now := time.Now()
+		isDoubleClick := clickedRow == m.lastClickRow &&
+			now.Sub(m.lastClick) < 400*time.Millisecond
+
+		m.lastClick = now
+		m.lastClickRow = clickedRow
+
+		// Move cursor to clicked row.
+		m.table.GotoTop()
+		m.table.MoveDown(clickedRow)
+
+		if isDoubleClick {
+			id := m.selectedRowID()
+			if id > 0 {
+				m.selectedID = id
+				m.currentPage = pageDetail
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -66,6 +135,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDetailKey(msg)
 	case pageAddURL:
 		return m.handleAddURLKey(msg)
+	case pageSchedule:
+		return m.handleScheduleKey(msg)
 	}
 	return m, nil
 }
@@ -115,7 +186,9 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		id := m.selectedRowID()
 		if id > 0 {
-			m.startDownload(id)
+			if _, err := m.queue.TryStart(id); err != nil {
+				m.err = err
+			}
 			m.loadDownloads()
 		}
 
@@ -128,6 +201,30 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				delete(m.activeDownloads, id)
 				m.loadDownloads()
 			}
+		}
+
+	case "s":
+		id := m.selectedRowID()
+		if id > 0 {
+			m.selectedID = id
+			m.scheduleInput.SetValue("")
+			m.scheduleInput.Focus()
+			m.currentPage = pageSchedule
+			return m, textinput.Blink
+		}
+
+	case "shift+up":
+		id := m.selectedRowID()
+		if id > 0 {
+			m.state.MoveQueuePosition(id, -1) //nolint:errcheck
+			m.loadDownloads()
+		}
+
+	case "shift+down":
+		id := m.selectedRowID()
+		if id > 0 {
+			m.state.MoveQueuePosition(id, 1) //nolint:errcheck
+			m.loadDownloads()
 		}
 	}
 
@@ -179,6 +276,40 @@ func (m *model) handleAddURLKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.urlInput, cmd = m.urlInput.Update(msg)
+	return m, cmd
+}
+
+var reHHMM = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
+
+func (m *model) handleScheduleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.currentPage = pageList
+		return m, nil
+
+	case "enter":
+		val := m.scheduleInput.Value()
+		if !reHHMM.MatchString(val) {
+			m.err = fmt.Errorf("format waktu tidak valid, gunakan HH:MM (contoh: 14:30)")
+			m.currentPage = pageList
+			return m, nil
+		}
+
+		id := m.selectedID
+		if id > 0 {
+			if err := m.state.SetScheduledAt(id, &val); err != nil {
+				m.err = err
+			} else {
+				m.state.UpdateDownloadStatus(id, "scheduled") //nolint:errcheck
+			}
+		}
+		m.currentPage = pageList
+		m.loadDownloads()
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.scheduleInput, cmd = m.scheduleInput.Update(msg)
 	return m, cmd
 }
 

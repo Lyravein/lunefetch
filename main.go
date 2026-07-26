@@ -58,8 +58,28 @@ func main() {
 	}
 
 	m := ui.NewModel(sm, cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.SetProgram(p)
+
+	// Scheduler: cek setiap menit apakah ada download yang jadwalnya sudah tiba.
+	go func() {
+		for {
+			now := time.Now()
+			hhmm := fmt.Sprintf("%02d:%02d", now.Hour(), now.Minute())
+			if ready, err := sm.ListScheduledReady(hhmm); err == nil {
+				for _, d := range ready {
+					id := d.ID
+					p.Send(ui.AddURLMsg{URL: ""}) // trigger refresh
+					sm.UpdateDownloadStatus(id, "pending")
+					sm.SetScheduledAt(id, nil) //nolint:errcheck
+					p.Send(ui.ScheduledReadyMsg{ID: id})
+				}
+			}
+			// Sleep until the next minute boundary.
+			next := now.Truncate(time.Minute).Add(time.Minute)
+			time.Sleep(time.Until(next))
+		}
+	}()
 
 	// Start local HTTP server so the browser extension can send URLs to the TUI.
 	apiServer := api.New(api.DefaultAddr, func(url string) {
