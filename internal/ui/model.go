@@ -130,10 +130,18 @@ func (m *model) resizeToWindow() {
 		return
 	}
 
+	// baseStyle adds a 1-char border on each side = 2 chars total.
+	// The table itself also has inner padding. Use width-4 as the usable area.
+	usable := m.width - 4
+	if usable < 40 {
+		usable = 40
+	}
+	m.table.SetWidth(usable)
+
 	// Fixed columns: # (4), Size (10), Progress (10), Speed (10), Status (10), _id (0)
-	// Borders/padding: 4 chars total
-	const fixedWidth = 4 + 10 + 10 + 10 + 10 + 4
-	fileWidth := m.width - fixedWidth
+	// Plus ~1 char padding per column border = 5 separators ≈ 5 chars.
+	const fixedCols = 4 + 10 + 10 + 10 + 10 + 5
+	fileWidth := usable - fixedCols
 	if fileWidth < 10 {
 		fileWidth = 10
 	}
@@ -147,7 +155,6 @@ func (m *model) resizeToWindow() {
 		{Title: "Status", Width: 10},
 		{Title: "_id", Width: 0},
 	})
-	m.table.SetWidth(m.width - 4)
 
 	// Reserve rows for: title (1) + blank (1) + header (1) + help (2) + padding (2) = 7
 	tableHeight := m.height - 7
