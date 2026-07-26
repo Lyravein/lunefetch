@@ -40,7 +40,7 @@ func (m *model) listView() string {
 	b.WriteString("\n\n")
 
 	b.WriteString(helpStyle.Render(
-		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
+		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  x: Unschedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
 	))
 
 	return b.String()

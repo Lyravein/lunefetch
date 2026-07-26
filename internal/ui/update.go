@@ -228,11 +228,30 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		id := m.selectedRowID()
 		if id > 0 {
-			m.selectedID = id
-			m.scheduleInput.SetValue("")
-			m.scheduleInput.Focus()
-			m.currentPage = pageSchedule
-			return m, textinput.Blink
+			dl, err := m.state.GetDownload(id)
+			if err == nil && dl != nil && (dl.Status == "paused" || dl.Status == "queued") {
+				m.selectedID = id
+				m.scheduleInput.SetValue("")
+				m.scheduleInput.Focus()
+				m.currentPage = pageSchedule
+				return m, textinput.Blink
+			}
+		}
+
+	case "x":
+		id := m.selectedRowID()
+		if id > 0 {
+			dl, err := m.state.GetDownload(id)
+			if err == nil && dl != nil && dl.Status == "scheduled" {
+				m.state.SetScheduledAt(id, nil) //nolint:errcheck
+				// Kembalikan ke status sebelumnya: kalau punya queue_position → queued, kalau tidak → paused
+				if dl.QueuePosition.Valid {
+					m.state.UpdateDownloadStatus(id, "queued") //nolint:errcheck
+				} else {
+					m.state.UpdateDownloadStatus(id, "paused") //nolint:errcheck
+				}
+				m.loadDownloads()
+			}
 		}
 
 	case "shift+up":
