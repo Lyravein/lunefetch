@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/lyravein/lunefetch/internal/config"
 	"github.com/lyravein/lunefetch/internal/core"
+	"github.com/lyravein/lunefetch/internal/notify"
 	"github.com/lyravein/lunefetch/internal/queue"
 	"github.com/lyravein/lunefetch/internal/storage"
 )
@@ -59,6 +60,7 @@ const (
 	pageRename
 	pageSetFolder
 	pageSpeedLimit
+	pageHistory
 )
 
 // conflictState holds the context needed to resolve a file conflict.
@@ -76,12 +78,71 @@ type duplicateState struct {
 	existingName string
 }
 
+// filterStatus mendefinisikan filter status yang aktif di list view.
+type filterStatus int
+
+const (
+	filterAll filterStatus = iota
+	filterActive
+	filterDownloading
+	filterQueued
+	filterPaused
+	filterCompleted
+	filterFailed
+	filterScheduled
+)
+
+func (f filterStatus) String() string {
+	switch f {
+	case filterActive:
+		return "Active"
+	case filterDownloading:
+		return "Downloading"
+	case filterQueued:
+		return "Queued"
+	case filterPaused:
+		return "Paused"
+	case filterCompleted:
+		return "Completed"
+	case filterFailed:
+		return "Failed"
+	case filterScheduled:
+		return "Scheduled"
+	default:
+		return "All"
+	}
+}
+
+// sortField mendefinisikan kolom yang jadi dasar sort.
+type sortField int
+
+const (
+	sortDefault sortField = iota // urutan queue-aware dari SQL
+	sortName
+	sortSize
+	sortStatus
+)
+
+func (s sortField) String() string {
+	switch s {
+	case sortName:
+		return "Name"
+	case sortSize:
+		return "Size"
+	case sortStatus:
+		return "Status"
+	default:
+		return "Default"
+	}
+}
+
 type model struct {
 	state           *storage.StateManager
 	cfg             *config.Config
 	program         *tea.Program
 	queue           *queue.Manager
 	downloads       []storage.DownloadRecord
+	visible         []storage.DownloadRecord // m.downloads setelah filter+search+sort
 	activeDownloads map[int64]*activeDownload
 	currentPage     page
 	table           table.Model
@@ -105,6 +166,8 @@ type model struct {
 	globalLimiter *core.Limiter // shared by every active download
 	globalLimit   int64         // bytes/sec, 0 = unlimited
 
+	notifier *notify.Notifier // notifikasi desktop, no-op kalau disabled/absen
+
 	// itemLimits menyimpan limit per download, dikunci dengan ID download.
 	// Hanya berisi entri untuk download yang benar-benar dibatasi; download
 	// tanpa entri jalan tanpa limit individual. Entri dihapus saat download
@@ -119,6 +182,20 @@ type model struct {
 	// berubah kalau tabel ter-refresh di belakang.
 	speedTargetID   int64
 	speedTargetName string
+
+	// Filter, sort, search — state session-only, tidak disimpan ke config.
+	statusFilter filterStatus
+	sortBy       sortField
+	sortDesc     bool
+	searchQuery  string // filter aktif (kosong = tidak ada)
+	searchPrev   string // query sebelum search dibuka, untuk restore saat esc
+	searchActive bool   // true = search input sedang terbuka
+	searchInput  textinput.Model
+
+	// History page state.
+	history         []storage.DownloadRecord
+	historyTable    table.Model
+	historySelected int64
 }
 
 // speedScope selects which limit the speed-limit page edits.
@@ -194,6 +271,11 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	spd.CharLimit = 20
 	spd.Width = 40
 
+	srch := textinput.New()
+	srch.Placeholder = "cari nama file..."
+	srch.CharLimit = 200
+	srch.Width = 40
+
 	sp := spinner.New()
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
@@ -208,11 +290,29 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 		renameInput:     ri,
 		folderInput:     fi,
 		speedInput:      spd,
+		searchInput:     srch,
 		spinner:         sp,
 		globalLimit:     cfg.GlobalSpeedLimit,
 		globalLimiter:   core.NewLimiter(cfg.GlobalSpeedLimit),
 		itemLimits:      make(map[int64]int64),
+		notifier:        notify.New(cfg.Notifications),
 	}
+
+	// History table — kolom sama dengan main table kecuali Speed diganti DeletedAt.
+	ht := table.New(
+		table.WithColumns([]table.Column{
+			{Title: "#", Width: 4},
+			{Title: "File", Width: 40},
+			{Title: "Size", Width: 10},
+			{Title: "Status", Width: 12},
+			{Title: "Deleted", Width: 16},
+			{Title: "_id", Width: 0},
+		}),
+		table.WithFocused(true),
+		table.WithHeight(20),
+	)
+	ht.SetStyles(s)
+	m.historyTable = ht
 
 	// Wire queue manager — startDownload is called by the queue when a slot opens.
 	m.queue = queue.NewManager(sm, cfg.MaxConcurrent, m.startDownload)
@@ -258,10 +358,19 @@ func (m *model) resizeToWindow() {
 		{Title: "_id", Width: 0},
 	})
 
-	// Reserve rows for: title (1) + blank (1) + header (1) + help (2) + padding (2) = 7
-	// plus 1 for the second help line, and 1 more when the limit line shows.
-	reserved := 8
+	// Reserve rows for:
+	// title(1) + blank(1) + table-header(1) + help-line-1(1) + help-line-2(1) + padding(2) = 7
+	// +1 kalau baris speed limit aktif
+	// +1 kalau baris filter/search aktif
+	// +1 kalau search input sedang terbuka
+	reserved := 7
 	if m.globalLimit > 0 || len(m.itemLimits) > 0 {
+		reserved++
+	}
+	if m.statusFilter != filterAll || m.searchQuery != "" {
+		reserved++
+	}
+	if m.searchActive {
 		reserved++
 	}
 	tableHeight := m.height - reserved
@@ -298,7 +407,97 @@ func (m *model) loadDownloads() {
 		return
 	}
 	m.downloads = downloads
+	m.applyView()
+}
+
+// applyView menjalankan pipeline filter → search → sort terhadap m.downloads
+// dan menyimpan hasilnya di m.visible, lalu rebuild tabel.
+func (m *model) applyView() {
+	src := m.downloads
+
+	// 1. Filter status.
+	if m.statusFilter != filterAll {
+		filtered := src[:0:0]
+		for _, d := range src {
+			if m.matchesFilter(d) {
+				filtered = append(filtered, d)
+			}
+		}
+		src = filtered
+	}
+
+	// 2. Filter search (case-insensitive substring pada nama file).
+	if m.searchQuery != "" {
+		q := strings.ToLower(m.searchQuery)
+		matched := src[:0:0]
+		for _, d := range src {
+			if strings.Contains(strings.ToLower(d.Filename), q) {
+				matched = append(matched, d)
+			}
+		}
+		src = matched
+	}
+
+	// 3. Sort.
+	if m.sortBy != sortDefault {
+		sorted := make([]storage.DownloadRecord, len(src))
+		copy(sorted, src)
+		m.sortRecords(sorted)
+		src = sorted
+	}
+
+	m.visible = src
 	m.updateTable()
+}
+
+// matchesFilter melaporkan apakah record d lulus filter status yang aktif.
+func (m *model) matchesFilter(d storage.DownloadRecord) bool {
+	switch m.statusFilter {
+	case filterActive:
+		return d.Status == "downloading" || d.Status == "queued" || d.Status == "paused"
+	case filterDownloading:
+		return d.Status == "downloading"
+	case filterQueued:
+		return d.Status == "queued"
+	case filterPaused:
+		return d.Status == "paused"
+	case filterCompleted:
+		return d.Status == "completed"
+	case filterFailed:
+		return d.Status == "failed"
+	case filterScheduled:
+		return d.Status == "scheduled"
+	}
+	return true
+}
+
+// sortRecords mengurutkan slice in-place sesuai m.sortBy dan m.sortDesc.
+func (m *model) sortRecords(recs []storage.DownloadRecord) {
+	less := func(i, j int) bool {
+		a, b := recs[i], recs[j]
+		var cmp int
+		switch m.sortBy {
+		case sortName:
+			cmp = strings.Compare(strings.ToLower(a.Filename), strings.ToLower(b.Filename))
+		case sortSize:
+			cmp = int(a.TotalSize - b.TotalSize)
+		case sortStatus:
+			cmp = strings.Compare(a.Status, b.Status)
+		}
+		if cmp == 0 {
+			cmp = int(a.ID - b.ID)
+		}
+		if m.sortDesc {
+			return cmp > 0
+		}
+		return cmp < 0
+	}
+	// insertion sort — list kecil, tidak perlu sort.Slice overhead
+	for i := 1; i < len(recs); i++ {
+		for j := i; j > 0 && less(j, j-1); j-- {
+			recs[j], recs[j-1] = recs[j-1], recs[j]
+		}
+	}
 }
 
 func formatSize(bytes int64) string {
@@ -437,9 +636,37 @@ func formatDuration(d time.Duration) string {
 	return formatInt(int64(s)) + "s"
 }
 
+func (m *model) loadHistory() {
+	deleted, err := m.state.ListDeleted()
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.history = deleted
+
+	rows := make([]table.Row, 0, len(deleted))
+	for i, d := range deleted {
+		deletedAt := ""
+		if d.DeletedAt.Valid {
+			deletedAt = d.DeletedAt.Time.Format("2006-01-02 15:04")
+		}
+		rows = append(rows, table.Row{
+			fmt.Sprintf("%d", i+1),
+			d.Filename,
+			formatSize(d.TotalSize),
+			d.Status,
+			deletedAt,
+			fmt.Sprintf("%d", d.ID),
+		})
+	}
+	m.historyTable.SetRows(rows)
+}
+
 func (m *model) updateTable() {
-	rows := make([]table.Row, 0, len(m.downloads))
-	for i, d := range m.downloads {
+	// Saat tickMsg tiba (bukan loadDownloads), re-apply view supaya progress
+	// yang aktif ikut terupdate tanpa perlu reload dari DB.
+	rows := make([]table.Row, 0, len(m.visible))
+	for i, d := range m.visible {
 		progress := "0%"
 		speed := "-"
 		status := d.Status

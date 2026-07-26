@@ -16,15 +16,17 @@ type ChunkRules struct {
 }
 
 type Config struct {
-	DownloadDir      string     `yaml:"download_dir"`
-	MaxRetries       int        `yaml:"max_retries"`
-	Timeout          int        `yaml:"timeout"`
-	ChunkRules       ChunkRules `yaml:"chunk_rules"`
-	SmallSize        int64      `yaml:"small_size"`
-	MediumSize       int64      `yaml:"medium_size"`
-	LargeSize        int64      `yaml:"large_size"`
-	MaxConcurrent    int        `yaml:"max_concurrent_downloads"`
-	GlobalSpeedLimit int64      `yaml:"global_speed_limit"` // bytes/sec, 0 = unlimited
+	DownloadDir          string     `yaml:"download_dir"`
+	MaxRetries           int        `yaml:"max_retries"`
+	Timeout              int        `yaml:"timeout"`
+	ChunkRules           ChunkRules `yaml:"chunk_rules"`
+	SmallSize            int64      `yaml:"small_size"`
+	MediumSize           int64      `yaml:"medium_size"`
+	LargeSize            int64      `yaml:"large_size"`
+	MaxConcurrent        int        `yaml:"max_concurrent_downloads"`
+	GlobalSpeedLimit     int64      `yaml:"global_speed_limit"`     // bytes/sec, 0 = unlimited
+	Notifications        bool       `yaml:"notifications"`          // notifikasi desktop via notify-send
+	HistoryRetentionDays int        `yaml:"history_retention_days"` // 0 = selamanya
 
 	// path menyimpan lokasi file config supaya Save() menulis ke tempat yang
 	// sama dengan asal Load(). Tidak diserialisasi.
@@ -48,10 +50,12 @@ func Default() *Config {
 			Large:  16,
 			XLarge: 32,
 		},
-		SmallSize:     1 << 30,         // 1 GB
-		MediumSize:    5 << 30,         // 5 GB
-		LargeSize:     100 * (1 << 30), // 100 GB
-		MaxConcurrent: 2,
+		SmallSize:            1 << 30,         // 1 GB
+		MediumSize:           5 << 30,         // 5 GB
+		LargeSize:            100 * (1 << 30), // 100 GB
+		MaxConcurrent:        2,
+		Notifications:        true,
+		HistoryRetentionDays: 30,
 	}
 }
 

@@ -61,6 +61,12 @@ func main() {
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	m.SetProgram(p)
 
+	// Auto-purge history yang sudah melewati batas retensi.
+	if cfg.HistoryRetentionDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -cfg.HistoryRetentionDays)
+		sm.PurgeOlderThan(cutoff) //nolint:errcheck — best-effort, gagal diam-diam
+	}
+
 	// Scheduler: cek setiap menit apakah ada download yang jadwalnya sudah tiba.
 	go func() {
 		for {

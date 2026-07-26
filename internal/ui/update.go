@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/lyravein/lunefetch/internal/core"
+	"github.com/lyravein/lunefetch/internal/storage"
 )
 
 type downloadReadyMsg struct{ id int64 }
@@ -54,7 +55,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseMsg(msg)
 
 	case tickMsg:
-		m.updateTable()
+		m.applyView()
 		return m, m.refreshCmd
 
 	case spinner.TickMsg:
@@ -79,6 +80,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// di-pause tetap tersimpan untuk resume.
 		delete(m.itemLimits, msg.id)
 		m.loadDownloads()
+
+		// Notifikasi desktop — jalankan async supaya TUI tidak nge-block.
+		if dl, err := m.state.GetDownload(msg.id); err == nil && dl != nil {
+			go func(filename, status string) {
+				switch status {
+				case "completed":
+					m.notifier.Send("Download selesai", filename)
+				case "failed":
+					m.notifier.Send("Download gagal", filename)
+				}
+			}(dl.Filename, dl.Status)
+		}
 		return m, nil
 
 	case proceedToRenameMsg:
@@ -193,12 +206,43 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSetFolderKey(msg)
 	case pageSpeedLimit:
 		return m.handleSpeedLimitKey(msg)
+	case pageHistory:
+		return m.handleHistoryKey(msg)
 	}
 	return m, nil
 }
 
 func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+
+	// Kalau search input sedang aktif, semua ketikan masuk ke sana dulu.
+	if m.searchActive {
+		switch msg.String() {
+		case "esc":
+			// Batal — kembalikan query ke sebelum dibuka.
+			m.searchActive = false
+			m.searchQuery = m.searchPrev
+			m.searchInput.SetValue(m.searchQuery)
+			m.searchInput.Blur()
+			m.applyView()
+			return m, nil
+		case "enter":
+			// Kunci hasil search.
+			m.searchQuery = m.searchInput.Value()
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.applyView()
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		default:
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			// Live filter saat ketik.
+			m.searchQuery = m.searchInput.Value()
+			m.applyView()
+			return m, cmd
+		}
+	}
 
 	switch msg.String() {
 	case "q", "ctrl+c":
@@ -231,6 +275,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "d":
+		// Soft delete — entri masuk history, file di disk dibiarkan utuh.
 		id := m.selectedRowID()
 		if id > 0 {
 			if ad, ok := m.activeDownloads[id]; ok {
@@ -238,18 +283,32 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				delete(m.activeDownloads, id)
 			}
 			delete(m.itemLimits, id)
-			// Delete both the .tmp file (in-progress) and the final file (completed).
+			m.state.DeleteDownload(id)
+			m.loadDownloads()
+		}
+		return m, nil
+
+	case "D":
+		// Hard delete — entri masuk history + file di disk dihapus.
+		id := m.selectedRowID()
+		if id > 0 {
+			if ad, ok := m.activeDownloads[id]; ok {
+				ad.downloader.Cancel()
+				delete(m.activeDownloads, id)
+			}
+			delete(m.itemLimits, id)
 			if dl, err := m.state.GetDownload(id); err == nil && dl != nil {
 				ext := filepath.Ext(dl.Filename)
 				baseName := dl.Filename[:len(dl.Filename)-len(ext)]
 				tmpPath := filepath.Join(m.cfg.DownloadDir, baseName+".tmp"+ext)
 				finalPath := filepath.Join(m.cfg.DownloadDir, dl.Filename)
-				os.Remove(tmpPath)
-				os.Remove(finalPath)
+				os.Remove(tmpPath)   //nolint:errcheck
+				os.Remove(finalPath) //nolint:errcheck
 			}
-			m.state.DeleteDownload(id)
+			m.state.DeleteWithFile(id)
 			m.loadDownloads()
 		}
+		return m, nil
 
 	case "r":
 		id := m.selectedRowID()
@@ -259,6 +318,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.loadDownloads()
 		}
+		return m, nil
 
 	case "p":
 		id := m.selectedRowID()
@@ -270,6 +330,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.loadDownloads()
 			}
 		}
+		return m, nil
 
 	case "s":
 		id := m.selectedRowID()
@@ -283,6 +344,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, textinput.Blink
 			}
 		}
+		return m, nil
 
 	case "x":
 		id := m.selectedRowID()
@@ -298,6 +360,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.loadDownloads()
 			}
 		}
+		return m, nil
 
 	case "shift+up":
 		id := m.selectedRowID()
@@ -305,6 +368,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state.MoveQueuePosition(id, -1) //nolint:errcheck
 			m.loadDownloads()
 		}
+		return m, nil
 
 	case "shift+down":
 		id := m.selectedRowID()
@@ -312,8 +376,56 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state.MoveQueuePosition(id, 1) //nolint:errcheck
 			m.loadDownloads()
 		}
+		return m, nil
+
+	case "F":
+		// Cycle filter: All → Active → Downloading → Queued → Paused → Completed → Failed → Scheduled → All
+		m.statusFilter = (m.statusFilter + 1) % 8
+		m.applyView()
+		return m, nil
+
+	case "o":
+		// Cycle sort field: Default → Name → Size → Status → Default
+		m.sortBy = (m.sortBy + 1) % 4
+		m.sortDesc = false
+		m.applyView()
+		return m, nil
+
+	case "O":
+		// Balik arah sort; kalau sortDefault tidak ada efek.
+		if m.sortBy != sortDefault {
+			m.sortDesc = !m.sortDesc
+			m.applyView()
+		}
+		return m, nil
+
+	case "h":
+		m.loadHistory()
+		m.currentPage = pageHistory
+		return m, nil
+
+	case "/":
+		// Buka search input inline.
+		m.searchPrev = m.searchQuery
+		m.searchActive = true
+		m.searchInput.SetValue(m.searchQuery)
+		m.searchInput.Focus()
+		m.searchInput.CursorEnd()
+		return m, textinput.Blink
+
+	case "c":
+		// Clear filter + search sekaligus.
+		m.statusFilter = filterAll
+		m.searchQuery = ""
+		m.searchActive = false
+		m.searchInput.SetValue("")
+		m.searchInput.Blur()
+		m.applyView()
+		return m, nil
 	}
 
+	// Navigation keys (up/down/j/k/pgup/pgdn/home/end/g/G/space/b/f/u)
+	// fall through to the table's own handler.
 	m.table, cmd = m.table.Update(msg)
 	return m, cmd
 }
@@ -760,6 +872,108 @@ func (m *model) createDownloadWithOptsCmd(url, filenameOverride, folder string) 
 // createDownloadCmd is kept for backward compat (browser extension AddURLMsg).
 func (m *model) createDownloadCmd(url string) tea.Cmd {
 	return m.createDownloadWithOptsCmd(url, "", m.cfg.DownloadDir)
+}
+
+// handleHistoryKey menangani key di pageHistory.
+// r = restore, D = purge satu, X = purge semua, esc/q = kembali ke list.
+// Navigasi (up/down/j/k/etc.) diteruskan ke historyTable.
+func (m *model) handleHistoryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.currentPage = pageList
+		return m, nil
+
+	case "r":
+		// Restore download: batal soft delete, status jadi paused.
+		// Kalau .tmp ada dan chunk progress valid, resume bisa dilanjut;
+		// kalau tidak, user tinggal tekan r dari list untuk download ulang.
+		id := m.historySelectedID()
+		if id > 0 {
+			if err := m.state.RestoreDownload(id); err != nil {
+				m.err = err
+				return m, nil
+			}
+			// Validasi .tmp — kalau tidak ada atau ukurannya tidak konsisten,
+			// reset chunk progress supaya resume mulai dari nol.
+			if dl, err := m.state.GetDownload(id); err == nil && dl != nil {
+				m.validateRestoredTmp(id, dl)
+			}
+			m.loadHistory()
+			m.loadDownloads()
+		}
+		return m, nil
+
+	case "D":
+		// Purge satu entri history secara permanen.
+		id := m.historySelectedID()
+		if id > 0 {
+			if err := m.state.PurgeDownload(id); err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.loadHistory()
+		}
+		return m, nil
+
+	case "X":
+		// Purge seluruh history.
+		if err := m.state.PurgeAllDeleted(); err != nil {
+			m.err = err
+			return m, nil
+		}
+		m.loadHistory()
+		return m, nil
+	}
+
+	// Navigasi diteruskan ke historyTable.
+	var cmd tea.Cmd
+	m.historyTable, cmd = m.historyTable.Update(msg)
+	return m, cmd
+}
+
+// historySelectedID mengembalikan DB ID dari baris yang dipilih di historyTable.
+func (m *model) historySelectedID() int64 {
+	if len(m.historyTable.Rows()) == 0 {
+		return 0
+	}
+	row := m.historyTable.SelectedRow()
+	if len(row) == 0 {
+		return 0
+	}
+	return parseID(row[5]) // kolom 5 = hidden DB ID
+}
+
+// validateRestoredTmp memeriksa apakah .tmp masih ada dan ukurannya konsisten
+// dengan chunk progress yang tersimpan. Kalau tidak, chunk di-reset supaya
+// resume mulai dari nol dan tidak menghasilkan file korup.
+func (m *model) validateRestoredTmp(id int64, dl *storage.DownloadRecord) {
+	ext := filepath.Ext(dl.Filename)
+	baseName := dl.Filename[:len(dl.Filename)-len(ext)]
+	tmpPath := filepath.Join(m.cfg.DownloadDir, baseName+".tmp"+ext)
+
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		// .tmp tidak ada — reset chunk supaya resume mulai dari nol.
+		m.resetChunkProgress(id)
+		return
+	}
+
+	// .tmp ada — cek ukurannya >= downloaded_size di DB.
+	// Kalau lebih kecil, berarti file korup atau bukan milik kita.
+	if info.Size() < dl.DownloadedSize {
+		m.resetChunkProgress(id)
+	}
+}
+
+// resetChunkProgress mereset semua chunk ke pending dan downloaded_size ke 0.
+func (m *model) resetChunkProgress(id int64) {
+	m.state.DB().Exec( //nolint:errcheck
+		`UPDATE chunks SET downloaded_size = 0, status = 'pending', updated_at = CURRENT_TIMESTAMP
+		 WHERE download_id = ?`, id,
+	)
+	m.state.DB().Exec( //nolint:errcheck
+		`UPDATE downloads SET downloaded_size = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, id,
+	)
 }
 
 func parseID(s string) int64 {

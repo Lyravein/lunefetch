@@ -28,6 +28,8 @@ func (m *model) View() string {
 		return m.setFolderView()
 	case pageSpeedLimit:
 		return m.speedLimitView()
+	case pageHistory:
+		return m.historyView()
 	}
 	return ""
 }
@@ -47,7 +49,7 @@ func (m *model) listView() string {
 	b.WriteString(m.table.View())
 	b.WriteString("\n\n")
 
-	// Tampilkan speed limit aktif kalau ada yang di-set.
+	// Baris speed limit aktif.
 	if m.globalLimit > 0 || len(m.itemLimits) > 0 {
 		parts := []string{}
 		if m.globalLimit > 0 {
@@ -60,11 +62,37 @@ func (m *model) listView() string {
 		b.WriteString("\n")
 	}
 
+	// Baris filter/search/sort aktif.
+	if m.searchActive {
+		b.WriteString(helpStyle.Render("  / ") + m.searchInput.View())
+		b.WriteString("\n")
+	} else if m.statusFilter != filterAll || m.searchQuery != "" || m.sortBy != sortDefault {
+		var parts []string
+		if m.statusFilter != filterAll {
+			parts = append(parts, "filter:"+m.statusFilter.String())
+		}
+		if m.searchQuery != "" {
+			parts = append(parts, "search:"+truncate(m.searchQuery, 20))
+		}
+		if m.sortBy != sortDefault {
+			dir := "↑"
+			if m.sortDesc {
+				dir = "↓"
+			}
+			parts = append(parts, "sort:"+m.sortBy.String()+dir)
+		}
+		b.WriteString(helpStyle.Render("  " + strings.Join(parts, "  |  ") + "  (c: clear)"))
+		b.WriteString("\n")
+	}
+
+	// Help lines — dua baris ringkas.
 	b.WriteString(helpStyle.Render(
-		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  x: Unschedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
+		"  n:New  r:Resume  p:Pause  d:Delete  D:Delete+File  s:Schedule  x:Unschedule  enter:Detail  q:Quit",
 	))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  l: Speed Limit"))
+	b.WriteString(helpStyle.Render(
+		"  l:Limit  h:History  /:Search  F:Filter  o:Sort  O:Rev  c:Clear  Shift+↑↓:Reorder",
+	))
 
 	return b.String()
 }
@@ -335,6 +363,33 @@ func (m *model) conflictView() string {
 	b.WriteString("  C  Cancel    — buang hasil download\n")
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("  o: Overwrite  |  r: Rename  |  c / esc: Cancel"))
+
+	return b.String()
+}
+
+func (m *model) historyView() string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render(" History "))
+	b.WriteString("\n\n")
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		b.WriteString("\n\n")
+		m.err = nil
+	}
+
+	if len(m.history) == 0 {
+		b.WriteString(helpStyle.Render("  (belum ada download yang dihapus)"))
+		b.WriteString("\n\n")
+	} else {
+		b.WriteString(m.historyTable.View())
+		b.WriteString("\n\n")
+	}
+
+	b.WriteString(helpStyle.Render(
+		"  r: Restore  |  D: Purge satu  |  X: Purge semua  |  esc / q: Kembali",
+	))
 
 	return b.String()
 }
