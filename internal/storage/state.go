@@ -62,6 +62,16 @@ func NewStateManager(dbPath string) (*StateManager, error) {
 }
 
 func (sm *StateManager) migrate() error {
+	// Additive migrations must run FIRST so that existing DBs have the new
+	// columns before we try to create indexes on them.
+	additive := []string{
+		`ALTER TABLE downloads ADD COLUMN queue_position INTEGER`,
+		`ALTER TABLE downloads ADD COLUMN scheduled_at TEXT`,
+	}
+	for _, m := range additive {
+		sm.db.Exec(m) //nolint:errcheck — "duplicate column" error is expected on fresh DBs
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS downloads (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,21 +108,8 @@ func (sm *StateManager) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_downloads_queue_position ON downloads(queue_position);
 	`
 
-	if _, err := sm.db.Exec(schema); err != nil {
-		return err
-	}
-
-	// Additive migrations for existing DBs that don't have the new columns yet.
-	migrations := []string{
-		`ALTER TABLE downloads ADD COLUMN queue_position INTEGER`,
-		`ALTER TABLE downloads ADD COLUMN scheduled_at TEXT`,
-	}
-	for _, m := range migrations {
-		// Ignore "duplicate column" errors — means migration already applied.
-		sm.db.Exec(m) //nolint:errcheck
-	}
-
-	return nil
+	_, err := sm.db.Exec(schema)
+	return err
 }
 
 func (sm *StateManager) CreateDownload(url, filename string, totalSize int64, supportsRanges bool, numChunks int) (int64, error) {
