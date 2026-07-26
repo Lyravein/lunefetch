@@ -112,7 +112,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case AddURLMsg:
-		return m, m.createDownloadCmd(msg.URL)
+		m.pendingURL = msg.URL
+		m.pendingFilename = ""
+		m.pendingFolder = ""
+		return m, m.checkDuplicateCmd(msg.URL)
 	}
 
 	return m, nil
