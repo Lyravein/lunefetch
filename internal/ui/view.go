@@ -20,6 +20,12 @@ func (m *model) View() string {
 		return m.scheduleView()
 	case pageConflict:
 		return m.conflictView()
+	case pageDuplicate:
+		return m.duplicateView()
+	case pageRename:
+		return m.renameView()
+	case pageSetFolder:
+		return m.setFolderView()
 	}
 	return ""
 }
@@ -173,6 +179,49 @@ func (m *model) addURLView() string {
 	b.WriteString(m.urlInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  enter: Confirm  |  esc: Cancel"))
+
+	return b.String()
+}
+
+func (m *model) renameView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(" Rename File "))
+	b.WriteString("\n\n")
+	b.WriteString("Nama file (kosong = nama asli):\n")
+	b.WriteString(m.renameInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("  enter: Lanjut  |  esc: Lewati"))
+
+	return b.String()
+}
+
+func (m *model) setFolderView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(" Pilih Folder Tujuan "))
+	b.WriteString("\n\n")
+	b.WriteString("Folder tujuan:\n")
+	b.WriteString(m.folderInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("  enter: Mulai Download  |  esc: Batal"))
+
+	return b.String()
+}
+
+func (m *model) duplicateView() string {
+	if m.duplicate == nil {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(" URL Sudah Ada "))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("URL ini sudah pernah didownload sebagai:\n  %q\n\n", m.duplicate.existingName))
+	b.WriteString("Pilih aksi:\n\n")
+	b.WriteString("  A  Add anyway  — download ulang dengan nama baru (#1, #2, dst)\n")
+	b.WriteString("  R  Replace     — hapus yang lama, download ulang\n")
+	b.WriteString("  B  Block       — batalkan\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("  a: Add  |  r: Replace  |  b / esc: Block"))
 
 	return b.String()
 }

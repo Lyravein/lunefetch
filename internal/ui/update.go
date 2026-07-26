@@ -25,6 +25,13 @@ type fileConflictMsg struct {
 	filename   string
 }
 
+// duplicateURLMsg is sent when the user tries to add a URL that already exists in DB.
+type duplicateURLMsg struct {
+	url          string
+	existingID   int64
+	existingName string
+}
+
 // ScheduledReadyMsg is sent by the scheduler goroutine when a scheduled
 // download's time has arrived.
 type ScheduledReadyMsg struct{ ID int64 }
@@ -70,6 +77,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadDownloads()
 		return m, nil
 
+	case proceedToRenameMsg:
+		m.pendingURL = msg.url
+		m.renameInput.SetValue("")
+		m.renameInput.Focus()
+		m.currentPage = pageRename
+		return m, textinput.Blink
+
 	case fileConflictMsg:
 		m.conflict = &conflictState{
 			downloadID: msg.downloadID,
@@ -80,6 +94,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.activeDownloads, msg.downloadID)
 		m.currentPage = pageConflict
 		m.loadDownloads()
+		return m, nil
+
+	case duplicateURLMsg:
+		m.duplicate = &duplicateState{
+			url:          msg.url,
+			existingID:   msg.existingID,
+			existingName: msg.existingName,
+		}
+		m.currentPage = pageDuplicate
 		return m, nil
 
 	case ScheduledReadyMsg:
@@ -113,9 +136,6 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Action != tea.MouseActionRelease {
 			return m, nil
 		}
-		// Determine which row was clicked based on Y position.
-		// Table starts at row 2 (title + blank line), header is row 0 of table.
-		// Rows start after header, so offset = 3 (title + blank + header).
 		const rowOffset = 3
 		clickedRow := msg.Y - rowOffset
 		rows := m.table.Rows()
@@ -130,7 +150,6 @@ func (m *model) handleMouseMsg(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.lastClick = now
 		m.lastClickRow = clickedRow
 
-		// Move cursor to clicked row.
 		m.table.GotoTop()
 		m.table.MoveDown(clickedRow)
 
@@ -159,6 +178,12 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleScheduleKey(msg)
 	case pageConflict:
 		return m.handleConflictKey(msg)
+	case pageDuplicate:
+		return m.handleDuplicateKey(msg)
+	case pageRename:
+		return m.handleRenameKey(msg)
+	case pageSetFolder:
+		return m.handleSetFolderKey(msg)
 	}
 	return m, nil
 }
@@ -244,7 +269,6 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			dl, err := m.state.GetDownload(id)
 			if err == nil && dl != nil && dl.Status == "scheduled" {
 				m.state.SetScheduledAt(id, nil) //nolint:errcheck
-				// Kembalikan ke status sebelumnya: kalau punya queue_position → queued, kalau tidak → paused
 				if dl.QueuePosition.Valid {
 					m.state.UpdateDownloadStatus(id, "queued") //nolint:errcheck
 				} else {
@@ -274,9 +298,7 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // selectedRowID returns the download ID of the currently selected table row,
-// or 0 if there is no valid selection. SelectedRow may return an empty slice
-// even when the table has rows (e.g. cursor out of range after a refresh),
-// so both the row list and the row itself must be checked.
+// or 0 if there is no valid selection.
 func (m *model) selectedRowID() int64 {
 	if len(m.table.Rows()) == 0 {
 		return 0
@@ -303,21 +325,135 @@ func (m *model) handleAddURLKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.currentPage = pageList
+		m.pendingURL = ""
+		m.pendingFilename = ""
+		m.pendingFolder = ""
 
 	case "enter":
 		url := m.urlInput.Value()
 		if url == "" {
 			return m, nil
 		}
-
+		m.pendingURL = url
+		m.pendingFilename = ""
+		m.pendingFolder = ""
 		m.currentPage = pageList
-		m.updateTable()
-		return m, m.createDownloadCmd(url)
+		// Check for duplicate before proceeding.
+		return m, m.checkDuplicateCmd(url)
 	}
 
 	var cmd tea.Cmd
 	m.urlInput, cmd = m.urlInput.Update(msg)
 	return m, cmd
+}
+
+func (m *model) handleRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		// Skip rename, proceed to folder selection.
+		m.pendingFilename = ""
+		m.folderInput.SetValue(m.cfg.DownloadDir)
+		m.folderInput.Focus()
+		m.currentPage = pageSetFolder
+		return m, textinput.Blink
+
+	case "enter":
+		val := m.renameInput.Value()
+		if val != "" {
+			m.pendingFilename = val
+		}
+		m.folderInput.SetValue(m.cfg.DownloadDir)
+		m.folderInput.Focus()
+		m.currentPage = pageSetFolder
+		return m, textinput.Blink
+	}
+
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
+	return m, cmd
+}
+
+func (m *model) handleSetFolderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.currentPage = pageList
+		m.pendingURL = ""
+		m.pendingFilename = ""
+		m.pendingFolder = ""
+
+	case "enter":
+		val := m.folderInput.Value()
+		if val != "" {
+			m.pendingFolder = val
+		} else {
+			m.pendingFolder = m.cfg.DownloadDir
+		}
+		url := m.pendingURL
+		filename := m.pendingFilename
+		folder := m.pendingFolder
+		m.pendingURL = ""
+		m.pendingFilename = ""
+		m.pendingFolder = ""
+		m.updateTable()
+		return m, m.createDownloadWithOptsCmd(url, filename, folder)
+	}
+
+	var cmd tea.Cmd
+	m.folderInput, cmd = m.folderInput.Update(msg)
+	return m, cmd
+}
+
+func (m *model) handleDuplicateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.duplicate == nil {
+		m.currentPage = pageList
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "a", "A":
+		// Add anyway — download with suffix #1, #2, dst di nama file (handled in createDownloadWithOptsCmd)
+		url := m.duplicate.url
+		m.duplicate = nil
+		// Lanjut ke rename page
+		m.renameInput.SetValue("")
+		m.renameInput.Focus()
+		m.currentPage = pageRename
+		m.pendingURL = url
+		return m, textinput.Blink
+
+	case "r", "R":
+		// Replace — hapus yang lama, download ulang
+		if m.duplicate != nil {
+			oldID := m.duplicate.existingID
+			if ad, ok := m.activeDownloads[oldID]; ok {
+				ad.downloader.Cancel()
+				delete(m.activeDownloads, oldID)
+			}
+			if dl, err := m.state.GetDownload(oldID); err == nil && dl != nil {
+				ext := filepath.Ext(dl.Filename)
+				baseName := dl.Filename[:len(dl.Filename)-len(ext)]
+				os.Remove(filepath.Join(m.cfg.DownloadDir, baseName+".tmp"+ext))
+				os.Remove(filepath.Join(m.cfg.DownloadDir, dl.Filename))
+			}
+			m.state.DeleteDownload(oldID)
+		}
+		url := m.duplicate.url
+		m.duplicate = nil
+		m.renameInput.SetValue("")
+		m.renameInput.Focus()
+		m.currentPage = pageRename
+		m.pendingURL = url
+		return m, textinput.Blink
+
+	case "b", "B", "esc":
+		// Block — batalkan
+		m.duplicate = nil
+		m.pendingURL = ""
+		m.currentPage = pageList
+		m.loadDownloads()
+	}
+
+	return m, nil
 }
 
 var reHHMM = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
@@ -342,7 +478,7 @@ func (m *model) handleScheduleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.err = err
 			} else {
 				// Hapus queue_position supaya tidak ikut urutan queue.
-				m.state.SetQueuePosition(id, nil)              //nolint:errcheck
+				m.state.SetQueuePosition(id, nil)             //nolint:errcheck
 				m.state.UpdateDownloadStatus(id, "scheduled") //nolint:errcheck
 			}
 		}
@@ -405,7 +541,6 @@ func (m *model) handleConflictKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // resolveConflictName returns a non-conflicting path by appending (1), (2), etc.
-// e.g. /downloads/file.zip -> /downloads/file (1).zip
 func resolveConflictName(path string) string {
 	ext := filepath.Ext(path)
 	base := path[:len(path)-len(ext)]
@@ -417,18 +552,60 @@ func resolveConflictName(path string) string {
 	}
 	return path + ".new"
 }
-// in the background, returning a message the Update loop handles on the main
-// goroutine (so model state is never mutated from a stray goroutine).
-func (m *model) createDownloadCmd(url string) tea.Cmd {
+
+// checkDuplicateCmd checks if the URL already exists in the DB.
+// If duplicate found, sends duplicateURLMsg; otherwise proceeds to rename page.
+func (m *model) checkDuplicateCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		existing, err := m.state.FindByURL(url)
+		if err == nil && existing != nil {
+			return duplicateURLMsg{
+				url:          url,
+				existingID:   existing.ID,
+				existingName: existing.Filename,
+			}
+		}
+		// No duplicate — signal to open rename page (handled via pendingURL).
+		return proceedToRenameMsg{url: url}
+	}
+}
+
+// proceedToRenameMsg triggers the rename page after duplicate check passes.
+type proceedToRenameMsg struct{ url string }
+
+// createDownloadWithOptsCmd creates a download with optional filename and folder overrides.
+func (m *model) createDownloadWithOptsCmd(url, filenameOverride, folder string) tea.Cmd {
 	return func() tea.Msg {
 		info, err := core.GetFileInfo(url)
 		if err != nil {
 			return downloadErrMsg{err}
 		}
 
-		numChunks := m.cfg.ChunksForSize(info.Size)
+		filename := info.Filename
+		if filenameOverride != "" {
+			filename = filenameOverride
+		}
 
-		id, err := m.state.CreateDownload(url, info.Filename, info.Size, info.SupportsRange, numChunks)
+		// Add suffix if filename already exists in DB (add-anyway duplicate).
+		if existing, err := m.state.FindByURL(url); err == nil && existing != nil && existing.Filename == filename {
+			ext := filepath.Ext(filename)
+			base := filename[:len(filename)-len(ext)]
+			for i := 1; i < 1000; i++ {
+				candidate := fmt.Sprintf("%s #%d%s", base, i, ext)
+				if dup, _ := m.state.FindByURL(url); dup == nil || dup.Filename != candidate {
+					filename = candidate
+					break
+				}
+			}
+		}
+
+		downloadDir := folder
+		if downloadDir == "" {
+			downloadDir = m.cfg.DownloadDir
+		}
+
+		numChunks := m.cfg.ChunksForSize(info.Size)
+		id, err := m.state.CreateDownload(url, filename, info.Size, info.SupportsRange, numChunks)
 		if err != nil {
 			return downloadErrMsg{err}
 		}
@@ -447,6 +624,11 @@ func (m *model) createDownloadCmd(url string) tea.Cmd {
 
 		return downloadReadyMsg{id: id}
 	}
+}
+
+// createDownloadCmd is kept for backward compat (browser extension AddURLMsg).
+func (m *model) createDownloadCmd(url string) tea.Cmd {
+	return m.createDownloadWithOptsCmd(url, "", m.cfg.DownloadDir)
 }
 
 func parseID(s string) int64 {

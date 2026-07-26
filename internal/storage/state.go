@@ -125,6 +125,16 @@ func (sm *StateManager) CreateDownload(url, filename string, totalSize int64, su
 	return result.LastInsertId()
 }
 
+// FindByURL returns the first download record with the given URL, or nil if not found.
+func (sm *StateManager) FindByURL(url string) (*DownloadRecord, error) {
+	row := sm.db.QueryRow(
+		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
+		        queue_position, scheduled_at, created_at, updated_at
+		 FROM downloads WHERE url = ? LIMIT 1`, url,
+	)
+	return scanDownload(row)
+}
+
 func (sm *StateManager) CreateChunks(downloadID int64, startBytes, endBytes []int64) error {
 	tx, err := sm.db.Begin()
 	if err != nil {

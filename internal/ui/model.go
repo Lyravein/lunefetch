@@ -53,6 +53,9 @@ const (
 	pageAddURL
 	pageSchedule
 	pageConflict
+	pageDuplicate
+	pageRename
+	pageSetFolder
 )
 
 // conflictState holds the context needed to resolve a file conflict.
@@ -61,6 +64,13 @@ type conflictState struct {
 	tmpPath    string
 	finalPath  string
 	filename   string
+}
+
+// duplicateState holds the pending download info when a duplicate URL is detected.
+type duplicateState struct {
+	url            string
+	existingID     int64
+	existingName   string
 }
 
 type model struct {
@@ -74,6 +84,8 @@ type model struct {
 	table           table.Model
 	selectedID      int64
 	urlInput        textinput.Model
+	renameInput     textinput.Model
+	folderInput     textinput.Model
 	scheduleInput   textinput.Model
 	spinner         spinner.Model
 	err             error
@@ -82,6 +94,10 @@ type model struct {
 	lastClick       time.Time // for double-click detection
 	lastClickRow    int
 	conflict        *conflictState
+	duplicate       *duplicateState
+	pendingURL      string // URL waiting to be downloaded after rename/folder/duplicate resolved
+	pendingFilename string // filename override (from rename page)
+	pendingFolder   string // folder override (from set-folder page)
 }
 
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
@@ -122,6 +138,16 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	si.CharLimit = 5
 	si.Width = 20
 
+	ri := textinput.New()
+	ri.Placeholder = "Nama file baru..."
+	ri.CharLimit = 255
+	ri.Width = 60
+
+	fi := textinput.New()
+	fi.Placeholder = "Folder tujuan (kosong = default)..."
+	fi.CharLimit = 500
+	fi.Width = 60
+
 	sp := spinner.New()
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
@@ -133,6 +159,8 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 		table:           t,
 		urlInput:        ti,
 		scheduleInput:   si,
+		renameInput:     ri,
+		folderInput:     fi,
 		spinner:         sp,
 	}
 
