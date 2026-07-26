@@ -99,12 +99,14 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				ad.downloader.Cancel()
 				delete(m.activeDownloads, id)
 			}
-			// Delete the .tmp file from disk before removing the DB record.
+			// Delete both the .tmp file (in-progress) and the final file (completed).
 			if dl, err := m.state.GetDownload(id); err == nil && dl != nil {
 				ext := filepath.Ext(dl.Filename)
 				baseName := dl.Filename[:len(dl.Filename)-len(ext)]
 				tmpPath := filepath.Join(m.cfg.DownloadDir, baseName+".tmp"+ext)
+				finalPath := filepath.Join(m.cfg.DownloadDir, dl.Filename)
 				os.Remove(tmpPath)
+				os.Remove(finalPath)
 			}
 			m.state.DeleteDownload(id)
 			m.loadDownloads()
