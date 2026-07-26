@@ -26,6 +26,16 @@ type Config struct {
 	MaxConcurrent         int        `yaml:"max_concurrent_downloads"`
 	GlobalSpeedLimit      int64      `yaml:"global_speed_limit"`       // bytes/sec, 0 = unlimited
 	PerDownloadSpeedLimit int64      `yaml:"per_download_speed_limit"` // bytes/sec, 0 = unlimited
+
+	// path menyimpan lokasi file config supaya Save() menulis ke tempat yang
+	// sama dengan asal Load(). Tidak diserialisasi.
+	path string `yaml:"-"`
+}
+
+// SetPath menentukan lokasi file yang dipakai Save(). Dipakai di test supaya
+// tidak menimpa config asli user.
+func (c *Config) SetPath(p string) {
+	c.path = p
 }
 
 func Default() *Config {
@@ -59,28 +69,36 @@ func (c *Config) ChunksForSize(size int64) int {
 	return c.ChunkRules.XLarge
 }
 
-// Save menulis config ke ~/.config/lunefetch/config.yaml.
+// Save menulis config ke file asalnya (default ~/.config/lunefetch/config.yaml).
 func (c *Config) Save() error {
-	configDir := filepath.Join(os.Getenv("HOME"), ".config", "lunefetch")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	configFile := c.path
+	if configFile == "" {
+		configFile = DefaultPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(configFile), 0755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	configFile := filepath.Join(configDir, "config.yaml")
 	if err := os.WriteFile(configFile, data, 0644); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
 }
 
+// DefaultPath mengembalikan lokasi config default.
+func DefaultPath() string {
+	return filepath.Join(os.Getenv("HOME"), ".config", "lunefetch", "config.yaml")
+}
+
 func Load() (*Config, error) {
 	cfg := Default()
 
-	configDir := filepath.Join(os.Getenv("HOME"), ".config", "lunefetch")
-	configFile := filepath.Join(configDir, "config.yaml")
+	configFile := DefaultPath()
+	configDir := filepath.Dir(configFile)
+	cfg.path = configFile
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -107,3 +125,9 @@ func Load() (*Config, error) {
 
 	return cfg, nil
 }
+
+// readFile dan unmarshal dipisah supaya bisa dipakai di test tanpa menyentuh
+// path config default.
+func readFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+func unmarshal(data []byte, c *Config) error { return yaml.Unmarshal(data, c) }

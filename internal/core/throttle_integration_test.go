@@ -15,7 +15,7 @@ import (
 // TestDownloaderRespectsLimiter memverifikasi throttle benar-benar memperlambat
 // download nyata lewat HTTP server lokal.
 func TestDownloaderRespectsLimiter(t *testing.T) {
-	const size = 512 * 1024 // 512 KiB
+	const size = 256 * 1024 // 256 KiB
 	payload := strings.Repeat("x", size)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +29,8 @@ func TestDownloaderRespectsLimiter(t *testing.T) {
 	chunks := CalculateChunks(size, 4)
 	d := NewDownloader(srv.URL, dst, size, chunks, 4, 0)
 
-	// 128 KiB/s untuk 512 KiB => minimal ~2 detik setelah burst.
-	d.SetGlobalLimiter(NewLimiter(128 * 1024))
+	// 256 KiB/s untuk 256 KiB => ~1 detik.
+	d.SetGlobalLimiter(NewLimiter(256 * 1024))
 
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -49,10 +49,9 @@ func TestDownloaderRespectsLimiter(t *testing.T) {
 		t.Errorf("size = %d, want %d", info.Size(), size)
 	}
 
-	// Burst awal (maks 256 KiB pada rate ini) bisa lewat instan, sisanya
-	// harus di-throttle. Ambang konservatif untuk hindari flaky test.
-	if elapsed < 1*time.Second {
-		t.Errorf("download of %d bytes at 128 KiB/s took %v, expected throttling",
+	// Burst hanya 32 KiB, jadi hampir seluruh transfer kena throttle.
+	if elapsed < 600*time.Millisecond {
+		t.Errorf("download of %d bytes at 256 KiB/s took %v, expected throttling",
 			size, elapsed)
 	}
 	t.Logf("throttled download took %v", elapsed)
@@ -96,7 +95,7 @@ func TestGlobalLimiterSharedAcrossDownloads(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	shared := NewLimiter(128 * 1024)
+	shared := NewLimiter(256 * 1024)
 	tmpDir := t.TempDir()
 
 	done := make(chan error, 2)
@@ -117,9 +116,9 @@ func TestGlobalLimiterSharedAcrossDownloads(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	// Total 512 KiB melalui limiter 128 KiB/s bersama.
-	if elapsed < 1*time.Second {
-		t.Errorf("two downloads sharing 128 KiB/s took %v, expected throttling", elapsed)
+	// Total 512 KiB melalui limiter 256 KiB/s bersama => ~2 detik.
+	if elapsed < 1200*time.Millisecond {
+		t.Errorf("two downloads sharing 256 KiB/s took %v, expected throttling", elapsed)
 	}
 	t.Logf("two shared downloads took %v", elapsed)
 }

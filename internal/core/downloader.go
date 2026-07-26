@@ -15,6 +15,10 @@ import (
 	"time"
 )
 
+// readBufSize adalah ukuran buffer baca per iterasi. Nilai ini juga menentukan
+// burst maksimum limiter (lihat burstFor) supaya throttle langsung terasa.
+const readBufSize = 32 * 1024
+
 type Chunk struct {
 	Index      int
 	Start      int64
@@ -337,7 +341,7 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, readBufSize)
 	written := start
 	chunkDownloaded := downloaded
 	for {

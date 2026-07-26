@@ -64,7 +64,7 @@ func (m *model) listView() string {
 		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  x: Unschedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
 	))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  L: Speed Limit Global  |  Ctrl+L: Speed Limit Per-Download"))
+	b.WriteString(helpStyle.Render("  l: Speed Limit"))
 
 	return b.String()
 }
@@ -227,16 +227,7 @@ func (m *model) setFolderView() string {
 func (m *model) speedLimitView() string {
 	var b strings.Builder
 
-	scopeName := "Global"
-	desc := "Batas total bandwidth untuk semua download aktif."
-	current := m.globalLimit
-	if m.speedScope == scopePerDownload {
-		scopeName = "Per-Download"
-		desc = "Batas bandwidth untuk setiap download secara individual."
-		current = m.perDownloadLimit
-	}
-
-	b.WriteString(titleStyle.Render(" Speed Limit — " + scopeName + " "))
+	b.WriteString(titleStyle.Render(" Speed Limit "))
 	b.WriteString("\n\n")
 
 	if m.err != nil {
@@ -245,15 +236,29 @@ func (m *model) speedLimitView() string {
 		m.err = nil
 	}
 
-	b.WriteString(desc)
+	// Tampilkan kedua scope sekaligus, tandai yang sedang diedit, supaya jelas
+	// mana yang akan tersimpan saat enter.
+	globalMark, perMark := "  ", "> "
+	if m.speedScope == scopeGlobal {
+		globalMark, perMark = "> ", "  "
+	}
+	b.WriteString(globalMark + "Global       " + formatSpeedLimit(m.globalLimit) + "\n")
+	b.WriteString(helpStyle.Render("               total bandwidth semua download aktif"))
+	b.WriteString("\n")
+	b.WriteString(perMark + "Per-Download " + formatSpeedLimit(m.perDownloadLimit) + "\n")
+	b.WriteString(helpStyle.Render("               batas tiap download secara individual"))
 	b.WriteString("\n\n")
-	b.WriteString(fmt.Sprintf("Sekarang: %s\n\n", formatSpeedLimit(current)))
-	b.WriteString("Limit baru:\n")
+
+	scopeName := "global"
+	if m.speedScope == scopePerDownload {
+		scopeName = "per-download"
+	}
+	b.WriteString("Limit " + scopeName + " baru:\n")
 	b.WriteString(m.speedInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  Format: 500k, 2m, 1.5m, 1g  |  kosong = unlimited"))
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  enter: Simpan  |  esc: Batal"))
+	b.WriteString(helpStyle.Render("  tab: Ganti scope  |  enter: Simpan  |  esc: Batal"))
 
 	return b.String()
 }

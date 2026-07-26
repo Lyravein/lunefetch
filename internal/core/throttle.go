@@ -58,14 +58,17 @@ func makeLimiter(bytesPerSec int64) *rate.Limiter {
 	return rate.NewLimiter(rate.Limit(bytesPerSec), burstFor(bytesPerSec))
 }
 
-// burstFor menentukan burst size — 2× rate, minimal 32 KiB, maksimal 4 MiB.
+// burstFor menentukan burst size. Burst harus kecil — sebesar read buffer atau
+// rate itu sendiri, mana yang lebih kecil. Burst besar (misal 2× rate) bikin
+// download pendek lewat sepenuhnya tanpa kena throttle karena seluruh file
+// masuk ke dalam burst awal.
 func burstFor(bytesPerSec int64) int {
-	burst := int(bytesPerSec * 2)
-	if burst < 32*1024 {
-		burst = 32 * 1024
+	burst := int64(readBufSize)
+	if bytesPerSec < burst {
+		burst = bytesPerSec
 	}
-	if burst > 4*1024*1024 {
-		burst = 4 * 1024 * 1024
+	if burst < 1 {
+		burst = 1
 	}
-	return burst
+	return int(burst)
 }

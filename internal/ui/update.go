@@ -206,18 +206,12 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.urlInput.Focus()
 		return m, textinput.Blink
 
-	case "L":
-		// Set global speed limit (semua download share bandwidth).
+	case "l", "L":
+		// Buka page speed limit. Scope (global / per-download) di-toggle
+		// dengan tab di dalam page — ctrl+l dihindari karena banyak terminal
+		// memakainya untuk clear screen.
 		m.speedScope = scopeGlobal
 		m.speedInput.SetValue(speedInputValue(m.globalLimit))
-		m.speedInput.Focus()
-		m.currentPage = pageSpeedLimit
-		return m, textinput.Blink
-
-	case "ctrl+l":
-		// Set per-download speed limit (berlaku untuk download baru).
-		m.speedScope = scopePerDownload
-		m.speedInput.SetValue(speedInputValue(m.perDownloadLimit))
 		m.speedInput.Focus()
 		m.currentPage = pageSpeedLimit
 		return m, textinput.Blink
@@ -426,6 +420,19 @@ func (m *model) handleSpeedLimitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
 		m.currentPage = pageList
+		return m, nil
+
+	case "tab", "shift+tab":
+		// Toggle antara limit global dan per-download. Nilai input diganti ke
+		// limit milik scope yang baru supaya user tidak salah simpan.
+		if m.speedScope == scopeGlobal {
+			m.speedScope = scopePerDownload
+			m.speedInput.SetValue(speedInputValue(m.perDownloadLimit))
+		} else {
+			m.speedScope = scopeGlobal
+			m.speedInput.SetValue(speedInputValue(m.globalLimit))
+		}
+		m.speedInput.CursorEnd()
 		return m, nil
 
 	case "enter":
