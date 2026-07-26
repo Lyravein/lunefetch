@@ -9,21 +9,23 @@ import (
 )
 
 type ChunkRules struct {
-	Small    int `yaml:"small"`
-	Medium   int `yaml:"medium"`
-	Large    int `yaml:"large"`
-	XLarge   int `yaml:"xlarge"`
+	Small  int `yaml:"small"`
+	Medium int `yaml:"medium"`
+	Large  int `yaml:"large"`
+	XLarge int `yaml:"xlarge"`
 }
 
 type Config struct {
-	DownloadDir        string     `yaml:"download_dir"`
-	MaxRetries         int        `yaml:"max_retries"`
-	Timeout            int        `yaml:"timeout"`
-	ChunkRules         ChunkRules `yaml:"chunk_rules"`
-	SmallSize          int64      `yaml:"small_size"`
-	MediumSize         int64      `yaml:"medium_size"`
-	LargeSize          int64      `yaml:"large_size"`
-	MaxConcurrent      int        `yaml:"max_concurrent_downloads"`
+	DownloadDir           string     `yaml:"download_dir"`
+	MaxRetries            int        `yaml:"max_retries"`
+	Timeout               int        `yaml:"timeout"`
+	ChunkRules            ChunkRules `yaml:"chunk_rules"`
+	SmallSize             int64      `yaml:"small_size"`
+	MediumSize            int64      `yaml:"medium_size"`
+	LargeSize             int64      `yaml:"large_size"`
+	MaxConcurrent         int        `yaml:"max_concurrent_downloads"`
+	GlobalSpeedLimit      int64      `yaml:"global_speed_limit"`       // bytes/sec, 0 = unlimited
+	PerDownloadSpeedLimit int64      `yaml:"per_download_speed_limit"` // bytes/sec, 0 = unlimited
 }
 
 func Default() *Config {
@@ -55,6 +57,23 @@ func (c *Config) ChunksForSize(size int64) int {
 		return c.ChunkRules.Large
 	}
 	return c.ChunkRules.XLarge
+}
+
+// Save menulis config ke ~/.config/lunefetch/config.yaml.
+func (c *Config) Save() error {
+	configDir := filepath.Join(os.Getenv("HOME"), ".config", "lunefetch")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+	configFile := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configFile, data, 0644); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
 }
 
 func Load() (*Config, error) {

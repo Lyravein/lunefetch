@@ -187,6 +187,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleRenameKey(msg)
 	case pageSetFolder:
 		return m.handleSetFolderKey(msg)
+	case pageSpeedLimit:
+		return m.handleSpeedLimitKey(msg)
 	}
 	return m, nil
 }
@@ -202,6 +204,22 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentPage = pageAddURL
 		m.urlInput.SetValue("")
 		m.urlInput.Focus()
+		return m, textinput.Blink
+
+	case "L":
+		// Set global speed limit (semua download share bandwidth).
+		m.speedScope = scopeGlobal
+		m.speedInput.SetValue(speedInputValue(m.globalLimit))
+		m.speedInput.Focus()
+		m.currentPage = pageSpeedLimit
+		return m, textinput.Blink
+
+	case "ctrl+l":
+		// Set per-download speed limit (berlaku untuk download baru).
+		m.speedScope = scopePerDownload
+		m.speedInput.SetValue(speedInputValue(m.perDownloadLimit))
+		m.speedInput.Focus()
+		m.currentPage = pageSpeedLimit
 		return m, textinput.Blink
 
 	case "enter":
@@ -401,6 +419,55 @@ func (m *model) handleSetFolderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.folderInput, cmd = m.folderInput.Update(msg)
+	return m, cmd
+}
+
+func (m *model) handleSpeedLimitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.currentPage = pageList
+		return m, nil
+
+	case "enter":
+		limit, err := parseSpeedLimit(m.speedInput.Value())
+		if err != nil {
+			m.err = err
+			return m, nil
+		}
+
+		if m.speedScope == scopeGlobal {
+			m.globalLimit = limit
+			m.cfg.GlobalSpeedLimit = limit
+			// Global limiter dibagi ke semua download, jadi update rate-nya
+			// langsung berlaku ke download yang sedang berjalan.
+			m.globalLimiter.SetRate(limit)
+		} else {
+			m.perDownloadLimit = limit
+			m.cfg.PerDownloadSpeedLimit = limit
+			// Terapkan ke download yang sedang aktif juga.
+			for _, ad := range m.activeDownloads {
+				if ad.done.Load() {
+					continue
+				}
+				if limit > 0 {
+					ad.downloader.SetLimiter(core.NewLimiter(limit))
+				} else {
+					ad.downloader.SetLimiter(nil)
+				}
+			}
+		}
+
+		if err := m.cfg.Save(); err != nil {
+			m.err = err
+		}
+		// Baris "Limit:" muncul/hilang, jadi tinggi tabel perlu dihitung ulang.
+		m.resizeToWindow()
+		m.currentPage = pageList
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.speedInput, cmd = m.speedInput.Update(msg)
 	return m, cmd
 }
 

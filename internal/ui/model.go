@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -56,6 +58,7 @@ const (
 	pageDuplicate
 	pageRename
 	pageSetFolder
+	pageSpeedLimit
 )
 
 // conflictState holds the context needed to resolve a file conflict.
@@ -68,9 +71,9 @@ type conflictState struct {
 
 // duplicateState holds the pending download info when a duplicate URL is detected.
 type duplicateState struct {
-	url            string
-	existingID     int64
-	existingName   string
+	url          string
+	existingID   int64
+	existingName string
 }
 
 type model struct {
@@ -98,7 +101,21 @@ type model struct {
 	pendingURL      string // URL waiting to be downloaded after rename/folder/duplicate resolved
 	pendingFilename string // filename override (from rename page)
 	pendingFolder   string // folder override (from set-folder page)
+
+	globalLimiter    *core.Limiter // shared by every active download
+	globalLimit      int64         // bytes/sec, 0 = unlimited
+	perDownloadLimit int64         // bytes/sec applied to each new download, 0 = unlimited
+	speedInput       textinput.Model
+	speedScope       speedScope // which limit the speed page is editing
 }
+
+// speedScope selects which limit the speed-limit page edits.
+type speedScope int
+
+const (
+	scopeGlobal speedScope = iota
+	scopePerDownload
+)
 
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	t := table.New(
@@ -148,20 +165,29 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	fi.CharLimit = 500
 	fi.Width = 60
 
+	spd := textinput.New()
+	spd.Placeholder = "contoh: 500k, 2m, 1.5m (kosong = unlimited)"
+	spd.CharLimit = 20
+	spd.Width = 40
+
 	sp := spinner.New()
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
 	m := &model{
-		state:           sm,
-		cfg:             cfg,
-		activeDownloads: make(map[int64]*activeDownload),
-		currentPage:     pageList,
-		table:           t,
-		urlInput:        ti,
-		scheduleInput:   si,
-		renameInput:     ri,
-		folderInput:     fi,
-		spinner:         sp,
+		state:            sm,
+		cfg:              cfg,
+		activeDownloads:  make(map[int64]*activeDownload),
+		currentPage:      pageList,
+		table:            t,
+		urlInput:         ti,
+		scheduleInput:    si,
+		renameInput:      ri,
+		folderInput:      fi,
+		speedInput:       spd,
+		spinner:          sp,
+		globalLimit:      cfg.GlobalSpeedLimit,
+		perDownloadLimit: cfg.PerDownloadSpeedLimit,
+		globalLimiter:    core.NewLimiter(cfg.GlobalSpeedLimit),
 	}
 
 	// Wire queue manager — startDownload is called by the queue when a slot opens.
@@ -209,7 +235,12 @@ func (m *model) resizeToWindow() {
 	})
 
 	// Reserve rows for: title (1) + blank (1) + header (1) + help (2) + padding (2) = 7
-	tableHeight := m.height - 7
+	// plus 1 for the second help line, and 1 more when the limit line shows.
+	reserved := 8
+	if m.globalLimit > 0 || m.perDownloadLimit > 0 {
+		reserved++
+	}
+	tableHeight := m.height - reserved
 	if tableHeight < 3 {
 		tableHeight = 3
 	}
@@ -292,13 +323,78 @@ func format3Digits(n int64) string {
 
 func formatFloat(f float64) string {
 	if f < 10 {
-		return formatIntSmall(int64(f*100))[:1] + "." + formatIntSmall(int64(f*100))[1:]
+		return formatIntSmall(int64(f * 100))[:1] + "." + formatIntSmall(int64(f * 100))[1:]
 	}
 	return formatIntSmall(int64(f)) + "." + formatIntSmall(int64(f*10)%10)
 }
 
 func formatSpeed(bytesPerSec float64) string {
 	return formatSize(int64(bytesPerSec)) + "/s"
+}
+
+// parseSpeedLimit mengubah input human-readable jadi bytes/sec.
+// Menerima "500k", "2m", "1.5m", "1g", "1024" (bytes), atau kosong (unlimited).
+func parseSpeedLimit(s string) (int64, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" || s == "0" {
+		return 0, nil
+	}
+	s = strings.TrimSuffix(s, "b/s")
+	s = strings.TrimSuffix(s, "/s")
+	s = strings.TrimSuffix(s, "b")
+	s = strings.TrimSpace(s)
+
+	mult := int64(1)
+	if len(s) > 0 {
+		switch s[len(s)-1] {
+		case 'k':
+			mult = 1 << 10
+			s = s[:len(s)-1]
+		case 'm':
+			mult = 1 << 20
+			s = s[:len(s)-1]
+		case 'g':
+			mult = 1 << 30
+			s = s[:len(s)-1]
+		}
+	}
+
+	val, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return 0, fmt.Errorf("format tidak valid: %q (contoh: 500k, 2m)", s)
+	}
+	if val < 0 {
+		return 0, fmt.Errorf("speed limit tidak boleh negatif")
+	}
+	limit := int64(val * float64(mult))
+	if limit > 0 && limit < 1024 {
+		return 0, fmt.Errorf("speed limit minimal 1k")
+	}
+	return limit, nil
+}
+
+// formatSpeedLimit menampilkan limit dalam bentuk ringkas untuk UI.
+func formatSpeedLimit(bytesPerSec int64) string {
+	if bytesPerSec <= 0 {
+		return "unlimited"
+	}
+	return formatSize(bytesPerSec) + "/s"
+}
+
+// speedInputValue mengubah limit jadi string yang bisa diedit user di input.
+func speedInputValue(bytesPerSec int64) string {
+	switch {
+	case bytesPerSec <= 0:
+		return ""
+	case bytesPerSec%(1<<30) == 0:
+		return formatIntSmall(bytesPerSec/(1<<30)) + "g"
+	case bytesPerSec%(1<<20) == 0:
+		return formatIntSmall(bytesPerSec/(1<<20)) + "m"
+	case bytesPerSec%(1<<10) == 0:
+		return formatIntSmall(bytesPerSec/(1<<10)) + "k"
+	default:
+		return formatIntSmall(bytesPerSec)
+	}
 }
 
 func formatDuration(d time.Duration) string {
@@ -399,6 +495,13 @@ func (m *model) startDownload(id int64) {
 	downloader.SetProgressCallback(func(chunkIndex int, downloadedSize int64, status string) {
 		m.state.UpdateChunkProgress(id, chunkIndex, downloadedSize, status)
 	})
+
+	// Global limiter dibagi ke semua download; per-download limiter dibuat baru
+	// untuk tiap download supaya masing-masing dapat kuota sendiri.
+	downloader.SetGlobalLimiter(m.globalLimiter)
+	if m.perDownloadLimit > 0 {
+		downloader.SetLimiter(core.NewLimiter(m.perDownloadLimit))
+	}
 
 	ad := &activeDownload{
 		downloader: downloader,

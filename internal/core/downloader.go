@@ -58,6 +58,8 @@ type Downloader struct {
 	active     int32
 	speedBuf   []int64
 	onProgress ProgressCallback
+	limiter    *Limiter // per-download, nil = unlimited
+	globalLim  *Limiter // shared across all downloads, nil = unlimited
 }
 
 func NewDownloader(url, filePath string, totalSize int64, chunks []Chunk, numChunks, retries int) *Downloader {
@@ -100,6 +102,24 @@ func NewDownloader(url, filePath string, totalSize int64, chunks []Chunk, numChu
 // or status changes. Call before Start.
 func (d *Downloader) SetProgressCallback(cb ProgressCallback) {
 	d.onProgress = cb
+}
+
+// SetLimiter sets the per-download bandwidth limiter.
+// Bisa dipanggil kapan saja, termasuk saat download sedang berjalan.
+// Pass nil untuk unlimited.
+func (d *Downloader) SetLimiter(lim *Limiter) {
+	d.mu.Lock()
+	d.limiter = lim
+	d.mu.Unlock()
+}
+
+// SetGlobalLimiter sets the shared limiter used by every active download.
+// Karena limiter ini dibagi, total bandwidth semua download akan dibatasi
+// bersama-sama. Pass nil untuk unlimited.
+func (d *Downloader) SetGlobalLimiter(lim *Limiter) {
+	d.mu.Lock()
+	d.globalLim = lim
+	d.mu.Unlock()
 }
 
 // emitProgress invokes the progress callback if set. Must be called without
@@ -329,6 +349,22 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
+			// Throttle jika limiter aktif. Tunggu global dulu lalu per-download;
+			// karena keduanya harus lolos, yang paling ketat jadi bottleneck.
+			d.mu.RLock()
+			lim, glim := d.limiter, d.globalLim
+			d.mu.RUnlock()
+			if glim != nil {
+				if werr := glim.Wait(ctx, n); werr != nil {
+					return werr
+				}
+			}
+			if lim != nil {
+				if werr := lim.Wait(ctx, n); werr != nil {
+					return werr
+				}
+			}
+
 			if _, werr := d.file.WriteAt(buf[:n], written); werr != nil {
 				return fmt.Errorf("write at offset %d: %w", written, werr)
 			}

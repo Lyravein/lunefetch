@@ -26,6 +26,8 @@ func (m *model) View() string {
 		return m.renameView()
 	case pageSetFolder:
 		return m.setFolderView()
+	case pageSpeedLimit:
+		return m.speedLimitView()
 	}
 	return ""
 }
@@ -45,9 +47,24 @@ func (m *model) listView() string {
 	b.WriteString(m.table.View())
 	b.WriteString("\n\n")
 
+	// Tampilkan speed limit aktif kalau ada yang di-set.
+	if m.globalLimit > 0 || m.perDownloadLimit > 0 {
+		parts := []string{}
+		if m.globalLimit > 0 {
+			parts = append(parts, "global "+formatSpeedLimit(m.globalLimit))
+		}
+		if m.perDownloadLimit > 0 {
+			parts = append(parts, "per-dl "+formatSpeedLimit(m.perDownloadLimit))
+		}
+		b.WriteString(helpStyle.Render("  Limit: " + strings.Join(parts, "  |  ")))
+		b.WriteString("\n")
+	}
+
 	b.WriteString(helpStyle.Render(
 		"  n: New  |  r: Resume  |  p: Pause  |  d: Delete  |  s: Schedule  |  x: Unschedule  |  Shift+↑↓: Reorder  |  enter: Detail  |  q: Quit",
 	))
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("  L: Speed Limit Global  |  Ctrl+L: Speed Limit Per-Download"))
 
 	return b.String()
 }
@@ -203,6 +220,40 @@ func (m *model) setFolderView() string {
 	b.WriteString(m.folderInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  enter: Mulai Download  |  esc: Batal"))
+
+	return b.String()
+}
+
+func (m *model) speedLimitView() string {
+	var b strings.Builder
+
+	scopeName := "Global"
+	desc := "Batas total bandwidth untuk semua download aktif."
+	current := m.globalLimit
+	if m.speedScope == scopePerDownload {
+		scopeName = "Per-Download"
+		desc = "Batas bandwidth untuk setiap download secara individual."
+		current = m.perDownloadLimit
+	}
+
+	b.WriteString(titleStyle.Render(" Speed Limit — " + scopeName + " "))
+	b.WriteString("\n\n")
+
+	if m.err != nil {
+		b.WriteString(errorStyle.Render(fmt.Sprintf("Error: %v", m.err)))
+		b.WriteString("\n\n")
+		m.err = nil
+	}
+
+	b.WriteString(desc)
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("Sekarang: %s\n\n", formatSpeedLimit(current)))
+	b.WriteString("Limit baru:\n")
+	b.WriteString(m.speedInput.View())
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("  Format: 500k, 2m, 1.5m, 1g  |  kosong = unlimited"))
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("  enter: Simpan  |  esc: Batal"))
 
 	return b.String()
 }
