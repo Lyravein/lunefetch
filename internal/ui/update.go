@@ -337,8 +337,7 @@ func (m *model) handleAddURLKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.pendingURL = url
 		m.pendingFilename = ""
 		m.pendingFolder = ""
-		m.currentPage = pageList
-		// Check for duplicate before proceeding.
+		// Check for duplicate before proceeding; page will be set by the msg handler.
 		return m, m.checkDuplicateCmd(url)
 	}
 
