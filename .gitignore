@@ -1,0 +1,41 @@
+# Binaries
+download-manager
+dm-native-host
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Config
+.config/
+
+# Downloaded files
+downloads/
+
+# IDE / AI tools
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+CLAUDE.md
+
+# Context/session files
+context.md
+context-download-manager.txt

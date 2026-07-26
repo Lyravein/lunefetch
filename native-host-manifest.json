@@ -1,0 +1,7 @@
+{
+  "name": "com.lyravein.lunefetch",
+  "description": "Lunefetch native messaging host",
+  "path": "/usr/local/bin/dm-native-host",
+  "type": "stdio",
+  "allowed_extensions": ["lunefetch@lyravein"]
+}
