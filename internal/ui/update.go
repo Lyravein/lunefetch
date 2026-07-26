@@ -147,7 +147,7 @@ func (m *model) selectedRowID() int64 {
 	if len(row) == 0 {
 		return 0
 	}
-	return parseID(row[0])
+	return parseID(row[6]) // column 6 is the hidden DB ID
 }
 
 func (m *model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

@@ -70,12 +70,13 @@ type model struct {
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 	t := table.New(
 		table.WithColumns([]table.Column{
-			{Title: "ID", Width: 6},
+			{Title: "#", Width: 4},
 			{Title: "File", Width: 40},
 			{Title: "Size", Width: 10},
 			{Title: "Progress", Width: 12},
 			{Title: "Speed", Width: 12},
 			{Title: "Status", Width: 12},
+			{Title: "_id", Width: 0}, // hidden column — stores the real DB ID
 		}),
 		table.WithFocused(true),
 		table.WithHeight(20),
@@ -250,6 +251,7 @@ func (m *model) updateTable() {
 			progress,
 			speed,
 			status,
+			fmt.Sprintf("%d", d.ID), // hidden DB ID
 		})
 	}
 	m.table.SetRows(rows)
