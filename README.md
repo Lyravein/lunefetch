@@ -1,17 +1,19 @@
 # Lunefetch
 
-A multi-threaded download manager with TUI interface, built with Go.
+Multi-threaded download manager with TUI interface and browser integration, built with Go.
 
 ## Features
 
 - Multi-part parallel downloading with configurable chunks
 - Resume capability for interrupted downloads
 - Dynamic chunk calculation based on file size:
-  - < 1GB: 4 chunks
-  - 1GB - 5GB: 8 chunks
-  - > 5GB: 16 chunks
+  - < 1 GB: 4 chunks
+  - 1 GB – 5 GB: 8 chunks
+  - 5 GB – 100 GB: 16 chunks
+  - > 100 GB: 32 chunks
 - SQLite-based state persistence
 - Terminal UI with real-time progress tracking
+- Browser integration via Firefox/Zen extension (native messaging)
 
 ## Installation
 
@@ -22,62 +24,94 @@ A multi-threaded download manager with TUI interface, built with Go.
 ### Build
 
 ```bash
-go build -o download-manager
+go build -o lunefetch
 ```
+
+### Browser Extension
+
+Install the native messaging host and load the Firefox extension:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+Then in Firefox/Zen:
+1. Open `about:debugging` → This Firefox
+2. Click **Load Temporary Add-on**
+3. Select `extension/manifest.json`
 
 ## Usage
 
 ### Start TUI
 
 ```bash
-./download-manager
+./lunefetch
 ```
 
 ### Direct download
 
 ```bash
-./download-manager -u <url> [-c chunks] [-o output_dir]
+./lunefetch -u <url> [-c chunks] [-o output_dir]
 ```
 
 ### List downloads
 
 ```bash
-./download-manager --list
+./lunefetch --list
 ```
 
 ### Resume download
 
 ```bash
-./download-manager --resume <id>
+./lunefetch --resume <id>
 ```
+
+### TUI keybindings
+
+| Key     | Action         |
+|---------|----------------|
+| `n`     | New download   |
+| `r`     | Resume         |
+| `p`     | Pause          |
+| `d`     | Delete         |
+| `enter` | Detail view    |
+| `esc`   | Back           |
+| `q`     | Quit           |
 
 ## Configuration
 
-Config file location: `~/.config/download-manager/config.yaml`
-
-Default configuration:
+Config file: `~/.config/lunefetch/config.yaml`
 
 ```yaml
 download_dir: ~/Downloads
 max_retries: 3
 timeout: 30
 chunk_rules:
-  small: 4    # < 1GB
-  medium: 8   # 1GB - 5GB
-  large: 16   # > 5GB
+  small: 4     # < 1 GB
+  medium: 8    # 1 GB - 5 GB
+  large: 16    # 5 GB - 100 GB
+  xlarge: 32   # > 100 GB
+small_size: 1073741824    # 1 GB
+medium_size: 5368709120   # 5 GB
+large_size: 107374182400  # 100 GB
 ```
 
 ## Architecture
 
 ```
-download-manager/
+lunefetch/
+├── cmd/
+│   └── native-host/     # Firefox native messaging host
+├── extension/           # Firefox/Zen WebExtension
 ├── internal/
-│   ├── core/          # Download engine
-│   ├── storage/       # Database & file operations
-│   ├── config/        # Configuration management
-│   └── ui/            # TUI implementation
+│   ├── api/             # Local HTTP server (browser integration)
+│   ├── core/            # Download engine
+│   ├── storage/         # SQLite state management
+│   ├── config/          # Configuration
+│   └── ui/              # TUI (bubbletea)
 └── db/
-    └── migrations/    # SQLite schema
+    └── migrations/      # SQLite schema
 ```
 
 ## License
