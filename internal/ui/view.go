@@ -32,7 +32,7 @@ func (m *model) listView() string {
 		m.err = nil
 	}
 
-	b.WriteString(baseStyle.Render(m.table.View()))
+	b.WriteString(m.table.View())
 	b.WriteString("\n\n")
 
 	b.WriteString(helpStyle.Render(

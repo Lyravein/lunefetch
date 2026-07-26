@@ -130,17 +130,16 @@ func (m *model) resizeToWindow() {
 		return
 	}
 
-	// baseStyle adds a 1-char border on each side = 2 chars total.
-	// The table itself also has inner padding. Use width-4 as the usable area.
-	usable := m.width - 4
+	// Without the baseStyle border wrapper, usable = full terminal width.
+	usable := m.width
 	if usable < 40 {
 		usable = 40
 	}
 	m.table.SetWidth(usable)
 
-	// Fixed columns: # (4), Size (10), Progress (10), Speed (10), Status (10), _id (0)
-	// Plus ~1 char padding per column border = 5 separators ≈ 5 chars.
-	const fixedCols = 4 + 10 + 10 + 10 + 10 + 5
+	// Fixed columns: # (4), Size (10), Progress (10), Speed (10), Status (10)
+	// bubbles/table adds 1-char left+right padding per column = 2 chars × 6 visible cols = 12
+	const fixedCols = 4 + 10 + 10 + 10 + 10 + 12
 	fileWidth := usable - fixedCols
 	if fileWidth < 10 {
 		fileWidth = 10
