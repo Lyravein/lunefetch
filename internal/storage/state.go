@@ -387,7 +387,7 @@ func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 		        queue_position, scheduled_at, created_at, updated_at
 		 FROM downloads ORDER BY
 		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END ASC NULLS LAST,
-		   created_at DESC`,
+		   created_at ASC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list downloads: %w", err)
