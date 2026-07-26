@@ -149,6 +149,7 @@ func (d *Downloader) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	d.mu.Lock()
 	d.cancel = cancel
+	d.done = make(chan struct{}) // reset done channel for each Start call
 	d.mu.Unlock()
 	defer cancel()
 
