@@ -165,22 +165,18 @@ func (m *model) resizeToWindow() {
 
 	// Fixed columns: # (4), Size (10), Progress (10), Speed (10), Status (10)
 	// bubbles/table adds 1-char left+right padding per column = 2 chars × 6 visible cols = 12
-	const fixedCols = 4 + 10 + 10 + 10 + 10 + 12
+	const fixedCols = 4 + 10 + 10 + 10 + 12 + 12
 	fileWidth := usable - fixedCols
 	if fileWidth < 10 {
 		fileWidth = 10
 	}
-	if fileWidth > 30 {
-		fileWidth = 30
-	}
-
 	m.table.SetColumns([]table.Column{
 		{Title: "#", Width: 4},
 		{Title: "File", Width: fileWidth},
 		{Title: "Size", Width: 10},
 		{Title: "Progress", Width: 10},
 		{Title: "Speed", Width: 10},
-		{Title: "Status", Width: 10},
+		{Title: "Status", Width: 12},
 		{Title: "_id", Width: 0},
 	})
 
