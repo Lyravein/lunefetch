@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"os"
+	"path/filepath"
+
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -89,6 +92,13 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if ad, ok := m.activeDownloads[id]; ok {
 				ad.downloader.Cancel()
 				delete(m.activeDownloads, id)
+			}
+			// Delete the .tmp file from disk before removing the DB record.
+			if dl, err := m.state.GetDownload(id); err == nil && dl != nil {
+				ext := filepath.Ext(dl.Filename)
+				baseName := dl.Filename[:len(dl.Filename)-len(ext)]
+				tmpPath := filepath.Join(m.cfg.DownloadDir, baseName+".tmp"+ext)
+				os.Remove(tmpPath)
 			}
 			m.state.DeleteDownload(id)
 			m.loadDownloads()
