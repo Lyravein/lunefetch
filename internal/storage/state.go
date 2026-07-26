@@ -386,7 +386,7 @@ func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 		`SELECT id, url, filename, total_size, downloaded_size, status, supports_ranges, num_chunks,
 		        queue_position, scheduled_at, created_at, updated_at
 		 FROM downloads ORDER BY
-		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END ASC NULLS LAST,
+		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END DESC NULLS LAST,
 		   created_at ASC`,
 	)
 	if err != nil {
