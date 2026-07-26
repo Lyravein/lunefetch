@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -217,7 +218,7 @@ func formatDuration(d time.Duration) string {
 
 func (m *model) updateTable() {
 	rows := make([]table.Row, 0, len(m.downloads))
-	for _, d := range m.downloads {
+	for i, d := range m.downloads {
 		progress := "0%"
 		speed := "-"
 		status := d.Status
@@ -243,7 +244,7 @@ func (m *model) updateTable() {
 		}
 
 		rows = append(rows, table.Row{
-			formatInt(d.ID),
+			fmt.Sprintf("%d", i+1),
 			d.Filename,
 			formatSize(d.TotalSize),
 			progress,
