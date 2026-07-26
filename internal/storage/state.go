@@ -135,6 +135,13 @@ func (sm *StateManager) FindByURL(url string) (*DownloadRecord, error) {
 	return scanDownload(row)
 }
 
+// FilenameExists returns true if a record with the given filename already exists in DB.
+func (sm *StateManager) FilenameExists(filename string) bool {
+	var count int
+	sm.db.QueryRow(`SELECT COUNT(*) FROM downloads WHERE filename = ?`, filename).Scan(&count)
+	return count > 0
+}
+
 func (sm *StateManager) CreateChunks(downloadID int64, startBytes, endBytes []int64) error {
 	tx, err := sm.db.Begin()
 	if err != nil {

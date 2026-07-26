@@ -412,11 +412,24 @@ func (m *model) handleDuplicateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.String() {
 	case "a", "A":
-		// Add anyway — download with suffix #1, #2, dst di nama file (handled in createDownloadWithOptsCmd)
+		// Add anyway — generate suffix #1, #2, dst lalu set ke renameInput supaya user bisa edit
+		existingName := m.duplicate.existingName
 		url := m.duplicate.url
 		m.duplicate = nil
-		// Lanjut ke rename page
-		m.renameInput.SetValue("")
+
+		// Cari suffix yang belum dipakai
+		ext := filepath.Ext(existingName)
+		base := existingName[:len(existingName)-len(ext)]
+		suggested := existingName
+		for i := 1; i < 1000; i++ {
+			candidate := fmt.Sprintf("%s #%d%s", base, i, ext)
+			if !m.state.FilenameExists(candidate) {
+				suggested = candidate
+				break
+			}
+		}
+
+		m.renameInput.SetValue(suggested)
 		m.renameInput.Focus()
 		m.currentPage = pageRename
 		m.pendingURL = url
