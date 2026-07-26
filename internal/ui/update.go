@@ -341,6 +341,8 @@ func (m *model) handleScheduleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := m.state.SetScheduledAt(id, &val); err != nil {
 				m.err = err
 			} else {
+				// Hapus queue_position supaya tidak ikut urutan queue.
+				m.state.SetQueuePosition(id, nil)              //nolint:errcheck
 				m.state.UpdateDownloadStatus(id, "scheduled") //nolint:errcheck
 			}
 		}
