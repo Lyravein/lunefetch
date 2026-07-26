@@ -53,6 +53,7 @@ const (
 type model struct {
 	state           *storage.StateManager
 	cfg             *config.Config
+	program         *tea.Program
 	downloads       []storage.DownloadRecord
 	activeDownloads map[int64]*activeDownload
 	currentPage     page
@@ -112,6 +113,12 @@ func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
 
 	m.loadDownloads()
 	return m
+}
+
+// SetProgram wires the tea.Program so goroutines can send messages back to
+// the TUI update loop (e.g. to trigger a refresh when a download finishes).
+func (m *model) SetProgram(p *tea.Program) {
+	m.program = p
 }
 
 func (m *model) Init() tea.Cmd {
@@ -308,5 +315,10 @@ func (m *model) startDownload(id int64) {
 			}
 		}
 		ad.done.Store(true)
+		// Notify the TUI to refresh immediately so status updates without
+		// waiting for the next tick.
+		if m.program != nil {
+			m.program.Send(downloadDoneMsg{id: id})
+		}
 	}()
 }

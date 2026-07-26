@@ -12,6 +12,7 @@ import (
 
 type downloadReadyMsg struct{ id int64 }
 type downloadErrMsg struct{ err error }
+type downloadDoneMsg struct{ id int64 }
 
 // AddURLMsg is sent by the HTTP API server when the browser extension
 // forwards a URL to download.
@@ -43,6 +44,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case downloadErrMsg:
 		m.err = msg.err
+		return m, nil
+
+	case downloadDoneMsg:
+		delete(m.activeDownloads, msg.id)
+		m.loadDownloads()
 		return m, nil
 
 	case AddURLMsg:

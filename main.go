@@ -57,7 +57,9 @@ func main() {
 		return
 	}
 
-	p := tea.NewProgram(ui.NewModel(sm, cfg), tea.WithAltScreen())
+	m := ui.NewModel(sm, cfg)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	m.SetProgram(p)
 
 	// Start local HTTP server so the browser extension can send URLs to the TUI.
 	apiServer := api.New(api.DefaultAddr, func(url string) {
