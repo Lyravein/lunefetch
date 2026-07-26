@@ -385,17 +385,16 @@ func (m *model) handleSetFolderKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		val := m.folderInput.Value()
-		if val != "" {
-			m.pendingFolder = val
-		} else {
-			m.pendingFolder = m.cfg.DownloadDir
+		folder := val
+		if folder == "" {
+			folder = m.cfg.DownloadDir
 		}
 		url := m.pendingURL
 		filename := m.pendingFilename
-		folder := m.pendingFolder
 		m.pendingURL = ""
 		m.pendingFilename = ""
 		m.pendingFolder = ""
+		m.currentPage = pageList
 		m.updateTable()
 		return m, m.createDownloadWithOptsCmd(url, filename, folder)
 	}
