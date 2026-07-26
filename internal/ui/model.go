@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -51,7 +52,16 @@ const (
 	pageDetail
 	pageAddURL
 	pageSchedule
+	pageConflict
 )
+
+// conflictState holds the context needed to resolve a file conflict.
+type conflictState struct {
+	downloadID int64
+	tmpPath    string
+	finalPath  string
+	filename   string
+}
 
 type model struct {
 	state           *storage.StateManager
@@ -71,6 +81,7 @@ type model struct {
 	height          int
 	lastClick       time.Time // for double-click detection
 	lastClickRow    int
+	conflict        *conflictState
 }
 
 func NewModel(sm *storage.StateManager, cfg *config.Config) *model {
@@ -377,8 +388,30 @@ func (m *model) startDownload(id int64) {
 			// set the status; don't clobber it with "failed".
 		case err != nil:
 			m.state.UpdateDownloadStatus(id, "failed")
+			ad.done.Store(true)
+			m.queue.OnDone(id)
+			if m.program != nil {
+				m.program.Send(downloadDoneMsg{id: id})
+			}
+			return
 		default:
-			if mvErr := core.MoveFile(tmpPath, filepath.Join(m.cfg.DownloadDir, download.Filename)); mvErr != nil {
+			finalPath := filepath.Join(m.cfg.DownloadDir, download.Filename)
+			// Check if destination file already exists.
+			if _, statErr := os.Stat(finalPath); statErr == nil {
+				// File exists — pause here and ask the user what to do.
+				m.state.UpdateDownloadStatus(id, "paused")
+				ad.done.Store(true)
+				if m.program != nil {
+					m.program.Send(fileConflictMsg{
+						downloadID: id,
+						tmpPath:    tmpPath,
+						finalPath:  finalPath,
+						filename:   download.Filename,
+					})
+				}
+				return
+			}
+			if mvErr := core.MoveFile(tmpPath, finalPath); mvErr != nil {
 				m.err = mvErr
 				m.state.UpdateDownloadStatus(id, "failed")
 			} else {

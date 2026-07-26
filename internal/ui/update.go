@@ -17,6 +17,14 @@ type downloadReadyMsg struct{ id int64 }
 type downloadErrMsg struct{ err error }
 type downloadDoneMsg struct{ id int64 }
 
+// fileConflictMsg is sent when a completed download's destination file already exists.
+type fileConflictMsg struct {
+	downloadID int64
+	tmpPath    string
+	finalPath  string
+	filename   string
+}
+
 // ScheduledReadyMsg is sent by the scheduler goroutine when a scheduled
 // download's time has arrived.
 type ScheduledReadyMsg struct{ ID int64 }
@@ -59,6 +67,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case downloadDoneMsg:
 		delete(m.activeDownloads, msg.id)
+		m.loadDownloads()
+		return m, nil
+
+	case fileConflictMsg:
+		m.conflict = &conflictState{
+			downloadID: msg.downloadID,
+			tmpPath:    msg.tmpPath,
+			finalPath:  msg.finalPath,
+			filename:   msg.filename,
+		}
+		delete(m.activeDownloads, msg.downloadID)
+		m.currentPage = pageConflict
 		m.loadDownloads()
 		return m, nil
 
@@ -137,6 +157,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAddURLKey(msg)
 	case pageSchedule:
 		return m.handleScheduleKey(msg)
+	case pageConflict:
+		return m.handleConflictKey(msg)
 	}
 	return m, nil
 }
@@ -313,7 +335,67 @@ func (m *model) handleScheduleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// createDownloadCmd fetches file info and creates the download + chunk records
+func (m *model) handleConflictKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.conflict == nil {
+		m.currentPage = pageList
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "o", "O":
+		// Overwrite — hapus file lama lalu move .tmp ke final
+		os.Remove(m.conflict.finalPath)
+		if mvErr := core.MoveFile(m.conflict.tmpPath, m.conflict.finalPath); mvErr != nil {
+			m.err = mvErr
+			m.state.UpdateDownloadStatus(m.conflict.downloadID, "failed")
+		} else {
+			m.state.UpdateDownloadStatus(m.conflict.downloadID, "completed")
+		}
+		m.queue.OnDone(m.conflict.downloadID)
+		m.conflict = nil
+		m.currentPage = pageList
+		m.loadDownloads()
+
+	case "r", "R":
+		// Rename — cari nama yang belum terpakai: file (1).zip, file (2).zip, dst
+		newPath := resolveConflictName(m.conflict.finalPath)
+		if mvErr := core.MoveFile(m.conflict.tmpPath, newPath); mvErr != nil {
+			m.err = mvErr
+			m.state.UpdateDownloadStatus(m.conflict.downloadID, "failed")
+		} else {
+			m.state.UpdateDownloadStatus(m.conflict.downloadID, "completed")
+		}
+		m.queue.OnDone(m.conflict.downloadID)
+		m.conflict = nil
+		m.currentPage = pageList
+		m.loadDownloads()
+
+	case "c", "C", "esc":
+		// Cancel — hapus .tmp, set status failed
+		os.Remove(m.conflict.tmpPath)
+		m.state.UpdateDownloadStatus(m.conflict.downloadID, "failed")
+		m.queue.OnDone(m.conflict.downloadID)
+		m.conflict = nil
+		m.currentPage = pageList
+		m.loadDownloads()
+	}
+
+	return m, nil
+}
+
+// resolveConflictName returns a non-conflicting path by appending (1), (2), etc.
+// e.g. /downloads/file.zip -> /downloads/file (1).zip
+func resolveConflictName(path string) string {
+	ext := filepath.Ext(path)
+	base := path[:len(path)-len(ext)]
+	for i := 1; i < 1000; i++ {
+		candidate := fmt.Sprintf("%s (%d)%s", base, i, ext)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+	return path + ".new"
+}
 // in the background, returning a message the Update loop handles on the main
 // goroutine (so model state is never mutated from a stray goroutine).
 func (m *model) createDownloadCmd(url string) tea.Cmd {

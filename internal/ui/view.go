@@ -18,6 +18,8 @@ func (m *model) View() string {
 		return m.addURLView()
 	case pageSchedule:
 		return m.scheduleView()
+	case pageConflict:
+		return m.conflictView()
 	}
 	return ""
 }
@@ -183,6 +185,26 @@ func (m *model) scheduleView() string {
 	b.WriteString(m.scheduleInput.View())
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("  enter: Confirm  |  esc: Cancel"))
+
+	return b.String()
+}
+
+func (m *model) conflictView() string {
+	if m.conflict == nil {
+		m.currentPage = pageList
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(titleStyle.Render(" File Already Exists "))
+	b.WriteString("\n\n")
+	b.WriteString(fmt.Sprintf("File %q sudah ada di folder download.\n\n", m.conflict.filename))
+	b.WriteString("Pilih aksi:\n\n")
+	b.WriteString("  O  Overwrite  — timpa file lama\n")
+	b.WriteString("  R  Rename    — simpan sebagai \"file (1).zip\", dst\n")
+	b.WriteString("  C  Cancel    — buang hasil download\n")
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("  o: Overwrite  |  r: Rename  |  c / esc: Cancel"))
 
 	return b.String()
 }
