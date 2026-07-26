@@ -6,7 +6,11 @@
 
   "permissions": [
     "downloads",
-    "nativeMessaging"
+    "nativeMessaging",
+    "contextMenus",
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>"
   ],
 
   "background": {
