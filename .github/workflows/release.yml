@@ -45,7 +45,9 @@ jobs:
           go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch ./
           go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch-native-host ./cmd/native-host/
       - name: Stage release artifacts
-        run: cp extension/dist/lunefetch-*.zip extension/dist/SHA256SUMS extension/dist/RELEASE_NOTES.md dist/
+        run: |
+          cp extension/dist/lunefetch-*.zip extension/dist/RELEASE_NOTES.md dist/
+          (cd dist && sha256sum lunefetch lunefetch-native-host lunefetch-firefox.zip lunefetch-chromium.zip > SHA256SUMS)
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
@@ -88,15 +90,45 @@ jobs:
         run: |
           $Version = (Get-Content ./VERSION -Raw).Trim()
           ./scripts/test-windows-package.ps1 -Installer "./dist/Lunefetch-Setup-$Version-windows-amd64.exe"
+      - name: Generate Windows installer checksum
+        shell: pwsh
+        run: |
+          $Version = (Get-Content ./VERSION -Raw).Trim()
+          $Name = "Lunefetch-Setup-$Version-windows-amd64.exe"
+          $Hash = (Get-FileHash "./dist/$Name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$Hash  $Name" | Set-Content "./dist/$Name.sha256" -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: lunefetch-windows-installer
-          path: dist/Lunefetch-Setup-*-windows-amd64.exe
+          path: |
+            dist/Lunefetch-Setup-*-windows-amd64.exe
+            dist/Lunefetch-Setup-*-windows-amd64.exe.sha256
+
+  windows-clean-install:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: lunefetch-windows-installer
+          path: dist
+      - name: Test clean install from release artifact
+        shell: pwsh
+        run: |
+          $Version = (Get-Content ./VERSION -Raw).Trim()
+          $Name = "Lunefetch-Setup-$Version-windows-amd64.exe"
+          $Expected = (Get-Content "./dist/$Name.sha256" -Raw).Split()[0]
+          $Actual = (Get-FileHash "./dist/$Name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($Actual -ne $Expected) { throw "Windows installer checksum mismatch" }
+          ./scripts/test-windows-package.ps1 -Installer "./dist/$Name"
       - name: Add Windows installer to GitHub release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/Lunefetch-Setup-*-windows-amd64.exe
+          files: |
+            dist/Lunefetch-Setup-*-windows-amd64.exe
+            dist/Lunefetch-Setup-*-windows-amd64.exe.sha256
 
   firefox:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_stores
