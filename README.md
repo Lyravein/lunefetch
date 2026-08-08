@@ -82,10 +82,6 @@ The Chromium package contains a fixed public key, producing extension ID
 `iidkhocioaefjlhhigiaphejnlidchke`. The native-host manifest permits only that
 ID. Replacing the key requires updating `install.sh` at the same time.
 
-## License
-
-Lunefetch is available under the [MIT License](LICENSE).
-
 ## Configuration
 
 Configuration is stored at `~/.config/lunefetch/config.yaml` with mode `0600`.
