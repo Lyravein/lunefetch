@@ -4,8 +4,8 @@ Lunefetch is a desktop HTTP/HTTPS download manager built with Go and Fyne. It
 supports parallel ranged downloads, pause and resume, persistent queues,
 scheduling, speed limits, and browser handoff through native messaging.
 
-> Lunefetch is currently a development preview. Back up important files and
-> review [SECURITY.md](SECURITY.md) before testing browser integration.
+> Lunefetch v1.0.0 is the first public release. Review [SECURITY.md](SECURITY.md)
+> before enabling browser integration.
 
 ## Features
 
@@ -29,9 +29,14 @@ retried from the extension popup. Authenticated transfer remains disabled; see
 
 ## Requirements
 
-- Go 1.26.5 or the version declared in `go.mod`
-- Linux desktop dependencies required by Fyne
-- `zip` to build browser extension packages
+- Go 1.26.5 or the version declared in `go.mod` for development builds
+- Linux desktop dependencies required by Fyne for Linux development builds
+- Node.js 22.x and npm for extension tests and source builds
+- Bash and `zip` for extension packaging
+
+End users should use the release packages instead of building the desktop
+application. Linux binaries and the Windows installer are available from the
+[v1.0.0 GitHub release](https://github.com/Lyravein/lunefetch/releases/tag/v1.0.0).
 
 ## Build
 
@@ -61,6 +66,14 @@ the extensions:
 
 Running `./install.sh` without flags installs manifests for detected browser
 families. Extension archives are written to `extension/dist/`.
+
+The Firefox extension is being submitted to Firefox Add-ons. Until it is
+approved, download the Firefox release package and use the temporary-loading
+instructions below. The browser extension requires the Lunefetch desktop
+application and native host on the same computer. It transfers only replayable
+HTTP/HTTPS URLs and optional filename or destination hints explicitly supplied
+by the user. It does not transfer cookies, authorization headers, referrers,
+request bodies, or page content.
 
 Windows users can install the application and native browser host with the
 `Lunefetch-Setup-<version>-windows-amd64.exe` attached to each GitHub release.
@@ -122,6 +135,30 @@ go vet ./...
 The production entrypoint is the Fyne desktop UI under `internal/ui/`.
 `internal/ui-tui/` is retained as legacy code and is not exposed by the current
 binary.
+
+### Build the Extension
+
+The extension source is readable and reproducible from the tagged release:
+
+```bash
+git checkout v1.0.0
+scripts/check-version.sh
+cd extension
+npm ci
+./build.sh
+```
+
+The Firefox package is written to
+`extension/dist/lunefetch-firefox.zip`. The source files are not transpiled,
+concatenated, bundled, or minified. `build.sh` copies the source files into the
+package, creates the ZIP archive, and performs simple release-metadata
+substitution. The npm dependencies are development and testing tools only.
+
+For Mozilla source-code review, the archive must include `VERSION`,
+`extension/build.sh`, `extension/package.json`, `extension/package-lock.json`,
+`extension/src/`, `extension/manifests/`, `extension/icons/`, and
+`scripts/check-version.sh`. Do not include `node_modules/` or generated
+`extension/dist/` files in that source archive.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) and [ROADMAP.md](ROADMAP.md) for design
 and release work.
