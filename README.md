@@ -62,9 +62,11 @@ the extensions:
 Running `./install.sh` without flags installs manifests for detected browser
 families. Extension archives are written to `extension/dist/`.
 
-Windows users can run `powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`.
-Complete browser paths, package verification, upgrade, and uninstall details
-are documented in [`docs/browser-installation.md`](docs/browser-installation.md).
+Windows users can install the application and native browser host with the
+`Lunefetch-Setup-<version>-windows-amd64.exe` attached to each GitHub release.
+The PowerShell installer remains available for development. Complete browser
+paths, package verification, upgrade, and uninstall details are documented in
+[`docs/browser-installation.md`](docs/browser-installation.md).
 
 Firefox or Zen:
 

@@ -57,6 +57,47 @@ jobs:
           body_path: extension/dist/RELEASE_NOTES.md
           files: dist/*
 
+  windows:
+    needs: package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Windows build tools
+        shell: pwsh
+        run: |
+          choco install mingw innosetup -y --no-progress
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+          Split-Path (Get-Command gcc).Source | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Validate release version
+        shell: pwsh
+        run: |
+          $Version = (Get-Content ./VERSION -Raw).Trim()
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$Version") {
+            throw "tag $env:GITHUB_REF_NAME does not match VERSION $Version"
+          }
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./scripts/build-windows.ps1
+      - name: Installed package lifecycle smoke test
+        shell: pwsh
+        run: |
+          $Version = (Get-Content ./VERSION -Raw).Trim()
+          ./scripts/test-windows-package.ps1 -Installer "./dist/Lunefetch-Setup-$Version-windows-amd64.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lunefetch-windows-installer
+          path: dist/Lunefetch-Setup-*-windows-amd64.exe
+      - name: Add Windows installer to GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Lunefetch-Setup-*-windows-amd64.exe
+
   firefox:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_stores
     runs-on: ubuntu-latest

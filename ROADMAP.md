@@ -61,7 +61,7 @@ Hasil audit menyeluruh. Dikerjakan sebelum lanjut ke fitur v1.1 lainnya.
 - [x] Add Keep Both / Replace / Cancel destination-conflict UI
 - [x] Bind resume state to ETag/Last-Modified with `If-Range`
 - [x] Add interactive Fyne navigation, validation, responsive, and accessibility tests
-- [ ] Complete clean Linux and Windows packaging smoke tests (Linux completed; Windows GUI requires a MinGW/fyne-cross runner)
+- [x] Complete clean Linux and Windows packaging smoke tests (native Windows runner builds and installs the Inno Setup package; interactive GUI acceptance remains manual)
 
 ---
 
@@ -110,6 +110,7 @@ The Node integration harness is runnable locally without a browser binary. The C
 - [x] Add complete extension icons, store descriptions, screenshots, privacy disclosure, and permission rationale
 - [x] Add Firefox Add-ons signing and Chrome Web Store publication workflows (credential-gated; publication itself remains a maintainer action)
 - [x] Add Windows native-host installation, including required Chromium registry entries and Firefox manifest paths
+- [x] Build a per-user Windows installer containing the Fyne application, native host, shortcuts, browser registration, and clean uninstallation
 - [x] Detect and document Chrome, Chromium, Brave, Edge, Vivaldi, Firefox, and Zen installation paths
 - [x] Add clean Linux lifecycle smoke tests and Windows lifecycle tests for install, upgrade, uninstall, extension-ID stability, and stale native-host cleanup
 

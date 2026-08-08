@@ -28,13 +28,23 @@ place without changing either extension identity.
 
 ## Windows
 
-Run `powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`. Use
-`-Browser Firefox` or `-Browser Chromium` to limit registration, and
-`-Uninstall` to remove the binary, manifests, and registry entries.
+For normal installation, download
+`Lunefetch-Setup-<version>-windows-amd64.exe` from the GitHub release and run
+it. The per-user installer includes the desktop application and native host,
+creates a Start Menu shortcut, optionally creates a desktop shortcut, and
+registers native messaging for every supported browser. Administrator access
+is not required. Lunefetch can be removed from Windows **Installed apps**.
 
-The installer writes into `%LOCALAPPDATA%\Lunefetch` and registers per-user
-`HKCU` native messaging entries for Firefox, Chrome, Chromium, Brave, Edge, and
-Vivaldi. Administrator access is not required.
+Developers can instead run
+`powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`. Use
+`-Browser Firefox` or `-Browser Chromium` to limit native-host registration,
+and `-Uninstall` to remove the developer-installed binary, manifests, and
+registry entries.
+
+The graphical installer writes into `%LOCALAPPDATA%\Programs\Lunefetch`.
+The developer script writes into `%LOCALAPPDATA%\Lunefetch`. Both register
+per-user `HKCU` native messaging entries for Firefox, Chrome, Chromium, Brave,
+Edge, and Vivaldi.
 
 ## Extension Packages
 

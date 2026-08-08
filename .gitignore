@@ -35,6 +35,9 @@ lunefetch.png
 extension/dist/
 extension/node_modules/
 
+# Application release output
+/dist/
+
 # IDE / AI tools
 .vscode/
 .idea/
