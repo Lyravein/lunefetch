@@ -29,7 +29,7 @@ jobs:
           cache: npm
           cache-dependency-path: extension/package-lock.json
       - name: Install Fyne build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev libwayland-dev libxkbcommon-dev xorg-dev
       - name: Validate release version
         run: scripts/check-version.sh
       - name: Install extension tooling
