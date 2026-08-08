@@ -89,6 +89,6 @@ begin
     '"path":"' + HostPath + '","type":"stdio",' +
     '"allowed_extensions":["lunefetch@lyravein"]}';
 
-  SaveStringToUTF8File(ExpandConstant('{app}\{#NativeHost}.json'), ChromiumManifest, False);
-  SaveStringToUTF8File(ExpandConstant('{app}\{#NativeHost}-firefox.json'), FirefoxManifest, False);
+  SaveStringToFile(ExpandConstant('{app}\{#NativeHost}.json'), ChromiumManifest, False);
+  SaveStringToFile(ExpandConstant('{app}\{#NativeHost}-firefox.json'), FirefoxManifest, False);
 end;
