@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_stores:
+        description: Publish signed browser extensions
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - name: Install Fyne build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+      - name: Validate release version
+        run: scripts/check-version.sh
+      - name: Install extension tooling
+        working-directory: extension
+        run: npm ci
+      - name: Build deterministic extension packages
+        working-directory: extension
+        run: ./build.sh && (cd dist && sha256sum -c SHA256SUMS)
+      - name: Build Linux binaries
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          mkdir -p dist
+          go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch ./
+          go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch-native-host ./cmd/native-host/
+      - name: Stage release artifacts
+        run: cp extension/dist/lunefetch-*.zip extension/dist/SHA256SUMS extension/dist/RELEASE_NOTES.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+      - name: Create GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: extension/dist/RELEASE_NOTES.md
+          files: dist/*
+
+  firefox:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_stores
+    runs-on: ubuntu-latest
+    environment: browser-stores
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - working-directory: extension
+        run: npm ci && ./build.sh
+      - name: Sign and publish to Firefox Add-ons
+        working-directory: extension
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
+          WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+        run: npx web-ext sign --source-dir dist/firefox-unpacked --channel listed
+
+  chromium:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_stores
+    runs-on: ubuntu-latest
+    environment: browser-stores
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Chromium package
+        run: extension/build.sh
+      - name: Obtain Chrome Web Store access token
+        id: token
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+        run: |
+          token=$(curl --fail --silent --show-error https://oauth2.googleapis.com/token \
+            -d client_id="$CLIENT_ID" -d client_secret="$CLIENT_SECRET" \
+            -d refresh_token="$REFRESH_TOKEN" -d grant_type=refresh_token | jq -er .access_token)
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+      - name: Upload and publish Chrome Web Store package
+        env:
+          ACCESS_TOKEN: ${{ steps.token.outputs.token }}
+          EXTENSION_ID: iidkhocioaefjlhhigiaphejnlidchke
+          PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+        run: |
+          response=$(curl --fail --silent --show-error -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -T extension/dist/lunefetch-chromium.zip \
+            "https://chromewebstore.googleapis.com/upload/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:upload")
+          state=$(jq -r '.uploadState // empty' <<< "$response")
+          for attempt in {1..12}; do
+            [[ "$state" == "SUCCEEDED" ]] && break
+            [[ "$state" != "UPLOAD_IN_PROGRESS" ]] && { echo "$response" >&2; exit 1; }
+            sleep 10
+            response=$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              "https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:fetchStatus")
+            state=$(jq -r '.uploadState // empty' <<< "$response")
+          done
+          [[ "$state" == "SUCCEEDED" ]] || { echo "Chrome Web Store upload timed out" >&2; exit 1; }
+          curl --fail --silent --show-error -X POST \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "https://chromewebstore.googleapis.com/v2/publishers/$PUBLISHER_ID/items/$EXTENSION_ID:publish"

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Fyne build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev xorg-dev
+      - name: Test
+        run: go test ./...
+      - name: Race test
+        run: go test -race ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Validate installer and package extensions
+        run: bash -n install.sh && bash -n scripts/check-version.sh && bash -n scripts/test-install-linux.sh
+      - name: Linux install lifecycle smoke test
+        run: scripts/test-install-linux.sh
+
+  windows-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Windows install lifecycle smoke test
+        shell: pwsh
+        run: ./scripts/test-install-windows.ps1
+
+  extension:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - name: Install extension test tools
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Unit and integration tests
+        run: npm test
+      - name: JavaScript syntax checks
+        run: npm run check
+      - name: Build extension packages
+        run: bash -n build.sh && ../scripts/check-version.sh && ./build.sh && (cd dist && sha256sum -c SHA256SUMS)
+      - name: Validate Firefox package
+        run: npm run lint:firefox
+      - name: Chromium browser smoke test
+        run: npm run browser:chromium

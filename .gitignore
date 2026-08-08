@@ -28,6 +28,13 @@ go.work
 # Downloaded files
 downloads/
 
+# Local source artwork (the optimized app icon is lunefetch.ico)
+lunefetch.png
+
+# Extension build output
+extension/dist/
+extension/node_modules/
+
 # IDE / AI tools
 .vscode/
 .idea/
