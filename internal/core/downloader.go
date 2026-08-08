@@ -801,6 +801,14 @@ func GetFileInfo(rawURL, proxyURL string, allowLocal bool) (*FileInfo, error) {
 		}
 		info.Size = size
 	}
+	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	disposition, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Disposition"))
+	if mediaType == "text/html" && !strings.EqualFold(disposition, "attachment") {
+		return nil, fmt.Errorf("download URL returned an HTML page instead of a file")
+	}
+	if info.Size <= 0 {
+		return nil, fmt.Errorf("download response has no usable content length")
+	}
 
 	acceptRanges := resp.Header.Get("Accept-Ranges")
 	contentRange := resp.Header.Get("Content-Range")

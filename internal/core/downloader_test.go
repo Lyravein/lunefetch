@@ -399,6 +399,55 @@ func TestResumeRejectsChangedRepresentation(t *testing.T) {
 	}
 }
 
+func TestGetFileInfoRejectsHTMLOrUnknownSize(t *testing.T) {
+	tests := []struct {
+		name          string
+		contentType   string
+		contentLength string
+		wantError     string
+	}{
+		{name: "html page", contentType: "text/html; charset=UTF-8", contentLength: "128", wantError: "HTML page"},
+		{name: "unknown size", contentType: "application/octet-stream", wantError: "no usable content length"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tt.contentType)
+				if tt.contentLength != "" {
+					w.Header().Set("Content-Length", tt.contentLength)
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			if _, err := GetFileInfo(srv.URL+"/download.bin", "", true); err == nil {
+				t.Fatal("GetFileInfo accepted a non-file response")
+			} else if !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("GetFileInfo error = %q, want it to contain %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestGetFileInfoAllowsHTMLAttachment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="page.html"`)
+		w.Header().Set("Content-Length", "128")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	info, err := GetFileInfo(srv.URL+"/download", "", true)
+	if err != nil {
+		t.Fatalf("GetFileInfo rejected an HTML attachment: %v", err)
+	}
+	if info.Filename != "page.html" || info.Size != 128 {
+		t.Fatalf("GetFileInfo = filename %q size %d, want page.html size 128", info.Filename, info.Size)
+	}
+}
+
 func TestMoveFileReportsDestinationExists(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.bin")
