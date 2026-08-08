@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lunefetch Settings</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+  <header class="options-header">
+    <div class="brand"><img src="icons/icon-128.png" alt=""><div><strong>Lunefetch</strong><span>Browser integration settings</span></div></div>
+    <div id="save-state" role="status">Saved</div>
+  </header>
+  <main class="settings">
+    <section>
+      <h1>Behavior</h1>
+      <label class="row-control"><span><strong>Enable integration</strong><small>Allow handoffs to Lunefetch</small></span><input id="enabled" type="checkbox"></label>
+      <label class="row-control"><span><strong>Automatic interception</strong><small>Capture downloads matching the rules below</small></span><input id="automaticInterception" type="checkbox"></label>
+      <label class="row-control"><span><strong>Context menu</strong><small>Show “Download with Lunefetch” on links and media</small></span><input id="contextMenu" type="checkbox"></label>
+      <label class="row-control"><span><strong>Browser fallback</strong><small>Try handoff while Lunefetch appears offline; preserve the browser download on failure</small></span><input id="browserFallback" type="checkbox"></label>
+      <label class="row-control"><span><strong>Notifications</strong><small>Show accepted handoffs and recoverable failures</small></span><input id="notifications" type="checkbox"></label>
+    </section>
+
+    <section>
+      <h1>Capture Rules</h1>
+      <label class="field"><span>File extensions</span><textarea id="extensions" rows="8" spellcheck="false"></textarea><small>One extension per line, without a leading dot.</small></label>
+      <label class="field"><span>MIME types</span><textarea id="mimeTypes" rows="8" spellcheck="false"></textarea><small>One complete MIME type per line.</small></label>
+    </section>
+
+    <section>
+      <h1>Sites</h1>
+      <label class="field"><span>Allow only these sites</span><textarea id="allowSites" rows="6" placeholder="downloads.example.com" spellcheck="false"></textarea><small>Leave empty to allow every site not blocked below. Subdomains are included.</small></label>
+      <label class="field"><span>Never intercept these sites</span><textarea id="blockSites" rows="6" placeholder="private.example.com" spellcheck="false"></textarea><small>Block rules take precedence over allow rules.</small></label>
+    </section>
+
+    <section class="security-note">
+      <h1>Security Boundary</h1>
+      <p>Lunefetch sends only HTTP and HTTPS URLs. Cookies, authorization headers, referrers, and request bodies are never transferred.</p>
+      <button id="reset" class="danger">Reset all settings</button>
+    </section>
+  </main>
+  <script type="module" src="options.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Lunefetch",
+  "version": "1.0.0",
+  "description": "Intercept downloads and send them to Lunefetch",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvrfHaLDP4ImhfN6qVMeJ6q9W1veZmxXAXmYShwfiVCheNbuS+2hKmFtQVmm8xCjgH2nuEAAPf7jt8Zmrfah1+ceOTjuige2zX3gga5bGN9j6lazIS6x0g0GssDECPwiQNRyJZQojxEsXgpumkmwovCx7gYU4aMwwaKbb1yWJpQHGJd32F4RURGtNfLZA5LrvC42vAkfGzZ8S4vH7nw/UZsQUzBYR/VhOUoYP1lrf4JlnndjAtkxz2qLnz44ckdOTSzcFoQf6kBuDzqKvL0KA2Ysk73vBxAoOP+e2wchXilVaqg0P/IoEDc75/U//yU5d5k/pMu3/6L4aH1MAxzFp7QIDAQAB",
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+
+  "permissions": [
+    "downloads",
+    "nativeMessaging",
+    "contextMenus",
+    "storage",
+    "notifications",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": ["<all_urls>"],
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_title": "Lunefetch",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+
+  "options_page": "options.html"
+}

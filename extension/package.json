@@ -1,0 +1,16 @@
+{
+  "name": "lunefetch-extension-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check src/background.js && node --check src/core.mjs && node --check src/popup.mjs && node --check src/options.mjs && node --check src/ui.mjs",
+    "browser:chromium": "node test/chromium.smoke.mjs",
+    "screenshots": "node test/store-screenshots.mjs",
+    "lint:firefox": "web-ext lint --source-dir dist/firefox-unpacked"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "web-ext": "10.6.0"
+  }
+}

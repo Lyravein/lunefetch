@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Lunefetch</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+  <header class="brand">
+    <img src="icons/icon-128.png" alt="">
+    <div><strong>Lunefetch</strong><span id="mode">Interception on</span></div>
+    <label class="switch" title="Enable Lunefetch interception">
+      <input id="enabled" type="checkbox" aria-label="Enable Lunefetch interception">
+      <span></span>
+    </label>
+  </header>
+
+  <main>
+    <section class="status" aria-live="polite">
+      <i id="status-dot"></i>
+      <div><strong id="status-title">Checking connection</strong><span id="status-detail">Contacting native host...</span></div>
+      <button id="refresh" class="icon-button" title="Check connection" aria-label="Check connection">↻</button>
+    </section>
+
+    <section class="site">
+      <span>Current site</span>
+      <strong id="site-host">Unavailable</strong>
+      <button id="bypass" class="secondary" disabled>Pause here for 1 hour</button>
+    </section>
+
+    <label class="row-control">
+      <span><strong>Automatic interception</strong><small>Capture matching downloads</small></span>
+      <input id="automatic" type="checkbox">
+    </label>
+
+    <section class="failures">
+      <header><strong>Recent failures</strong><button id="clear-failures" class="text-button">Clear</button></header>
+      <div id="failure-list"><small>No recent handoff failures</small></div>
+    </section>
+  </main>
+
+  <footer><button id="options" class="text-button">Open settings</button></footer>
+  <script type="module" src="popup.mjs"></script>
+</body>
+</html>

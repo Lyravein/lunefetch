@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Download all with Lunefetch</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body class="batch">
+  <header class="options-header brand"><img src="icons/icon-128.png" alt=""><div><strong>Download all</strong><span id="source">Review links before sending</span></div></header>
+  <main class="batch-main">
+    <h1>Confirm downloads</h1>
+    <p id="summary">Loading page links...</p>
+    <div class="batch-toolbar">
+      <label class="field">Destination hint<input id="save-dir" type="text" placeholder="Optional absolute folder"></label>
+      <label class="field">Filename hint<input id="filename" type="text" placeholder="Only available for one link"></label>
+      <button id="send" class="primary" disabled>Send selected</button>
+    </div>
+    <div id="links" class="batch-list"></div>
+    <p id="result" class="batch-status" aria-live="polite"></p>
+  </main>
+  <script type="module" src="batch.mjs"></script>
+</body>
+</html>
