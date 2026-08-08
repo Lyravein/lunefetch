@@ -1,4 +1,4 @@
-package ui
+package uitui
 
 import (
 	"fmt"
@@ -414,12 +414,14 @@ func (m *model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, textinput.Blink
 
 	case "c":
-		// Clear filter + search sekaligus.
+		// Clear filter + search + sort sekaligus.
 		m.statusFilter = filterAll
 		m.searchQuery = ""
 		m.searchActive = false
 		m.searchInput.SetValue("")
 		m.searchInput.Blur()
+		m.sortBy = sortDefault
+		m.sortDesc = false
 		m.applyView()
 		return m, nil
 	}
@@ -832,7 +834,7 @@ type proceedToRenameMsg struct{ url string }
 // createDownloadWithOptsCmd creates a download with optional filename and folder overrides.
 func (m *model) createDownloadWithOptsCmd(url, filenameOverride, folder string) tea.Cmd {
 	return func() tea.Msg {
-		info, err := core.GetFileInfo(url)
+		info, err := core.GetFileInfo(url, "", false)
 		if err != nil {
 			return downloadErrMsg{err}
 		}
@@ -848,7 +850,7 @@ func (m *model) createDownloadWithOptsCmd(url, filenameOverride, folder string) 
 		}
 
 		numChunks := m.cfg.ChunksForSize(info.Size)
-		id, err := m.state.CreateDownload(url, filename, info.Size, info.SupportsRange, numChunks)
+		id, err := m.state.CreateDownload(url, filename, downloadDir, "", info.Size, info.SupportsRange, numChunks)
 		if err != nil {
 			return downloadErrMsg{err}
 		}

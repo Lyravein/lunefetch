@@ -1,4 +1,4 @@
-package ui
+package uitui
 
 import "testing"
 

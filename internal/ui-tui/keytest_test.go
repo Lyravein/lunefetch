@@ -1,4 +1,4 @@
-package ui
+package uitui
 
 import (
 	"path/filepath"
@@ -30,7 +30,7 @@ func newTestModel(t *testing.T) *model {
 // tabel supaya baris-nya bisa di-highlight seperti di UI sebenarnya.
 func addDownload(t *testing.T, m *model, filename, status string) int64 {
 	t.Helper()
-	id, err := m.state.CreateDownload("http://example.com/"+filename, filename, 1024, true, 1)
+	id, err := m.state.CreateDownload("http://example.com/"+filename, filename, t.TempDir(), "", 1024, true, 1)
 	if err != nil {
 		t.Fatalf("create download: %v", err)
 	}
