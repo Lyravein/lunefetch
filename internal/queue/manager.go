@@ -17,7 +17,7 @@ type Manager struct {
 	mu            sync.Mutex
 	state         *storage.StateManager
 	maxConcurrent int
-	active        int // number of downloads currently running
+	active        map[int64]struct{}
 	startFn       StartFunc
 }
 
@@ -25,6 +25,7 @@ func NewManager(state *storage.StateManager, maxConcurrent int, startFn StartFun
 	return &Manager{
 		state:         state,
 		maxConcurrent: maxConcurrent,
+		active:        make(map[int64]struct{}),
 		startFn:       startFn,
 	}
 }
@@ -33,7 +34,11 @@ func NewManager(state *storage.StateManager, maxConcurrent int, startFn StartFun
 func (m *Manager) SetMaxConcurrent(n int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if n < 1 {
+		n = 1
+	}
 	m.maxConcurrent = n
+	m.drainQueue()
 }
 
 // TryStart attempts to start the download immediately.
@@ -43,9 +48,21 @@ func (m *Manager) TryStart(id int64) (started bool, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.active < m.maxConcurrent {
-		m.active++
+	if _, exists := m.active[id]; exists {
+		return true, nil
+	}
+	rec, err := m.state.GetDownload(id)
+	if err != nil {
+		return false, err
+	}
+	if rec == nil || rec.DeletedAt.Valid {
+		return false, nil
+	}
+
+	if len(m.active) < m.maxConcurrent {
+		m.active[id] = struct{}{}
 		m.state.UpdateDownloadStatus(id, "downloading") //nolint:errcheck
+		m.state.SetQueuePosition(id, nil)               //nolint:errcheck
 		go m.startFn(id)
 		return true, nil
 	}
@@ -63,9 +80,10 @@ func (m *Manager) OnDone(id int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.active > 0 {
-		m.active--
+	if _, exists := m.active[id]; !exists {
+		return
 	}
+	delete(m.active, id)
 	m.state.SetQueuePosition(id, nil) //nolint:errcheck
 
 	m.drainQueue()
@@ -78,8 +96,11 @@ func (m *Manager) EnqueueScheduled(id int64) error {
 
 	m.state.SetScheduledAt(id, nil) //nolint:errcheck
 
-	if m.active < m.maxConcurrent {
-		m.active++
+	if _, exists := m.active[id]; exists {
+		return nil
+	}
+	if len(m.active) < m.maxConcurrent {
+		m.active[id] = struct{}{}
 		m.state.UpdateDownloadStatus(id, "downloading") //nolint:errcheck
 		go m.startFn(id)
 		return nil
@@ -92,12 +113,40 @@ func (m *Manager) EnqueueScheduled(id int64) error {
 func (m *Manager) Active() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.active
+	return len(m.active)
+}
+
+// Remove removes an inactive item from the persistent queue. Active workers
+// keep owning their slot until their completion path calls OnDone.
+func (m *Manager) Remove(id int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, active := m.active[id]; active {
+		return
+	}
+	m.state.SetQueuePosition(id, nil) //nolint:errcheck
+}
+
+// Drain starts persisted queued downloads while capacity is available.
+func (m *Manager) Drain() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drainQueue()
 }
 
 // enqueue assigns the next available queue_position to id and sets status to "queued".
 // Caller must hold m.mu.
 func (m *Manager) enqueue(id int64) error {
+	rec, err := m.state.GetDownload(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil || rec.DeletedAt.Valid {
+		return nil
+	}
+	if rec.Status == "queued" && rec.QueuePosition.Valid {
+		return nil
+	}
 	row := m.state.DB().QueryRow(
 		`SELECT COALESCE(MAX(queue_position), 0) FROM downloads WHERE status = 'queued'`,
 	)
@@ -115,12 +164,16 @@ func (m *Manager) enqueue(id int64) error {
 // drainQueue starts the next queued download if a slot is available.
 // Caller must hold m.mu.
 func (m *Manager) drainQueue() {
-	for m.active < m.maxConcurrent {
+	for len(m.active) < m.maxConcurrent {
 		next, err := m.state.NextInQueue()
 		if err != nil || next == nil {
 			return
 		}
-		m.active++
+		if _, exists := m.active[next.ID]; exists {
+			m.state.SetQueuePosition(next.ID, nil) //nolint:errcheck
+			continue
+		}
+		m.active[next.ID] = struct{}{}
 		m.state.UpdateDownloadStatus(next.ID, "downloading") //nolint:errcheck
 		m.state.SetQueuePosition(next.ID, nil)               //nolint:errcheck
 		go m.startFn(next.ID)

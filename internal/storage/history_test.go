@@ -20,7 +20,7 @@ func newSM(t *testing.T) *storage.StateManager {
 
 func createDL(t *testing.T, sm *storage.StateManager, filename, status string) int64 {
 	t.Helper()
-	id, err := sm.CreateDownload("http://example.com/"+filename, filename, 1024, true, 1)
+	id, err := sm.CreateDownload("http://example.com/"+filename, filename, t.TempDir(), "", 1024, true, 1)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -89,6 +89,90 @@ func TestSoftDeletePreservesStatus(t *testing.T) {
 	}
 }
 
+func TestCreateDownloadWithChunksAndProgressAreAtomic(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownloadWithChunks(
+		"https://example.com/file.bin", "file.bin", t.TempDir(), "", 20, true,
+		[]int64{0, 10}, []int64{9, 19}, "", "",
+	)
+	if err != nil {
+		t.Fatalf("create with chunks: %v", err)
+	}
+	chunks, err := sm.GetChunks(id)
+	if err != nil || len(chunks) != 2 {
+		t.Fatalf("chunks = %d, err = %v", len(chunks), err)
+	}
+	if err := sm.UpdateChunkProgress(id, 0, 7, "downloading"); err != nil {
+		t.Fatalf("update progress: %v", err)
+	}
+	record, err := sm.GetDownload(id)
+	if err != nil || record == nil {
+		t.Fatalf("download: %v", err)
+	}
+	if record.DownloadedSize != 7 {
+		t.Fatalf("aggregate progress = %d, want 7", record.DownloadedSize)
+	}
+}
+
+func TestCreateDownloadWithChunksPersistsValidators(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownloadWithChunks(
+		"https://example.com/file.bin", "file.bin", t.TempDir(), "", 10, true,
+		[]int64{0}, []int64{9}, `"v1"`, "Wed, 21 Oct 2015 07:28:00 GMT",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := sm.GetDownload(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rec.ETag.Valid || rec.ETag.String != `"v1"` {
+		t.Fatalf("ETag = %#v", rec.ETag)
+	}
+	if !rec.LastModified.Valid || rec.LastModified.String == "" {
+		t.Fatalf("LastModified = %#v", rec.LastModified)
+	}
+}
+
+func TestReconcileInterruptedPausesOnlyRunningDownloads(t *testing.T) {
+	sm := newSM(t)
+	running := createDL(t, sm, "running.bin", "downloading")
+	queued := createDL(t, sm, "queued.bin", "queued")
+	if err := sm.ReconcileInterrupted(); err != nil {
+		t.Fatal(err)
+	}
+	runningRecord, _ := sm.GetDownload(running)
+	queuedRecord, _ := sm.GetDownload(queued)
+	if runningRecord.Status != "paused" {
+		t.Fatalf("running status = %q, want paused", runningRecord.Status)
+	}
+	if queuedRecord.Status != "queued" {
+		t.Fatalf("queued status = %q, want queued", queuedRecord.Status)
+	}
+}
+
+func TestForeignKeysCascadePurgedChunks(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownloadWithChunks(
+		"https://example.com/file.bin", "file.bin", t.TempDir(), "", 10, true,
+		[]int64{0}, []int64{9}, "", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.DB().Exec(`DELETE FROM downloads WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := sm.GetChunks(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 0 {
+		t.Fatalf("got %d orphan chunks, want 0", len(chunks))
+	}
+}
+
 // ---------------------------------------------------------------------------
 // DeleteWithFile
 // ---------------------------------------------------------------------------
@@ -134,6 +218,28 @@ func TestFindByURLIgnoresDeleted(t *testing.T) {
 	}
 	if rec != nil {
 		t.Errorf("FindByURL should return nil for deleted download, got id=%d", rec.ID)
+	}
+}
+
+func TestFindByURLReturnsFullRecord(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownload("http://example.com/full.bin", "full.bin", "/tmp/downloads", "Archives", 2048, true, 4)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := sm.UpdateSpeedLimit(id, 123456); err != nil {
+		t.Fatalf("speed limit: %v", err)
+	}
+
+	rec, err := sm.FindByURL("http://example.com/full.bin")
+	if err != nil {
+		t.Fatalf("find by url: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("FindByURL returned nil for active record")
+	}
+	if rec.ID != id || rec.SaveDir != "/tmp/downloads" || rec.Category != "Archives" || rec.SpeedLimit != 123456 {
+		t.Fatalf("unexpected record: %+v", rec)
 	}
 }
 

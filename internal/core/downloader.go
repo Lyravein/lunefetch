@@ -5,14 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // readBufSize adalah ukuran buffer baca per iterasi. Nilai ini juga menentukan
@@ -64,6 +71,11 @@ type Downloader struct {
 	onProgress ProgressCallback
 	limiter    *Limiter // per-download, nil = unlimited
 	globalLim  *Limiter // shared across all downloads, nil = unlimited
+	proxyURL   string   // "" = no proxy
+	allowLocal bool     // true = permit LAN/loopback destinations
+	etag       string
+	modified   string
+	client     *http.Client
 }
 
 func NewDownloader(url, filePath string, totalSize int64, chunks []Chunk, numChunks, retries int) *Downloader {
@@ -99,6 +111,7 @@ func NewDownloader(url, filePath string, totalSize int64, chunks []Chunk, numChu
 		},
 		done:     make(chan struct{}),
 		speedBuf: make([]int64, 0, 10),
+		client:   newHTTPClient("", 0, false),
 	}
 }
 
@@ -117,7 +130,190 @@ func (d *Downloader) SetLimiter(lim *Limiter) {
 	d.mu.Unlock()
 }
 
-// SetGlobalLimiter sets the shared limiter used by every active download.
+// SetProxy mengatur proxy URL untuk downloader ini.
+// Format: "http://host:port", "socks5://host:port", atau "" untuk no proxy.
+func (d *Downloader) SetProxy(proxyURL string) {
+	d.mu.Lock()
+	d.proxyURL = proxyURL
+	d.client = newHTTPClient(proxyURL, 0, d.allowLocal)
+	d.mu.Unlock()
+}
+
+// SetAllowLocalHosts controls whether LAN, loopback, and link-local
+// destinations are reachable. Cloud metadata addresses stay blocked either way.
+// Safe to call in any order relative to SetProxy.
+func (d *Downloader) SetAllowLocalHosts(allow bool) {
+	d.mu.Lock()
+	d.allowLocal = allow
+	d.client = newHTTPClient(d.proxyURL, 0, allow)
+	d.mu.Unlock()
+}
+
+// SetHTTPClient replaces the HTTP client, primarily for callers that provide
+// a custom transport. The default client enforces the destination policy.
+func (d *Downloader) SetHTTPClient(client *http.Client) {
+	if client == nil {
+		return
+	}
+	d.mu.Lock()
+	d.client = client
+	d.mu.Unlock()
+}
+
+// SetValidators binds resumed range requests to the remote representation
+// observed when the download was created.
+func (d *Downloader) SetValidators(etag, lastModified string) {
+	d.mu.Lock()
+	d.etag = strings.TrimSpace(etag)
+	d.modified = strings.TrimSpace(lastModified)
+	d.mu.Unlock()
+}
+
+// metadataAddrs are cloud instance-metadata endpoints. Reaching them leaks
+// credentials, so they stay blocked even when local destinations are allowed.
+var metadataAddrs = []netip.Addr{
+	netip.MustParseAddr("169.254.169.254"),
+	netip.MustParseAddr("fd00:ec2::254"),
+}
+
+// addressPolicy decides which resolved addresses a download may reach.
+//
+// proxyHost is exempt from the policy: it is configured by the user, not by
+// the remote URL, and loopback proxies (Tor, mitmproxy) are a normal setup.
+// With a proxy in play the target host is still screened by safeRoundTripper.
+type addressPolicy struct {
+	allowLocal bool
+	proxyHost  string
+}
+
+func (p addressPolicy) blocked(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	for _, meta := range metadataAddrs {
+		if addr == meta {
+			return true
+		}
+	}
+	if addr.IsUnspecified() || addr.IsMulticast() {
+		return true
+	}
+	if p.allowLocal {
+		return false
+	}
+	return addr.IsLoopback() || addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+}
+
+func (p addressPolicy) exempt(host string) bool {
+	return p.proxyHost != "" && strings.EqualFold(host, p.proxyHost)
+}
+
+// newHTTPClient membuat http.Client dengan proxy opsional dan kebijakan tujuan.
+func newHTTPClient(proxyURL string, timeout time.Duration, allowLocal bool) *http.Client {
+	policy := addressPolicy{allowLocal: allowLocal}
+
+	transport := &http.Transport{
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+			policy.proxyHost = u.Hostname()
+		}
+	}
+	transport.DialContext = policy.dialContext
+
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: safeRoundTripper{transport: transport, policy: policy},
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		return validateHTTPURL(req.Context(), req.URL, policy)
+	}
+	return client
+}
+
+type safeRoundTripper struct {
+	transport http.RoundTripper
+	policy    addressPolicy
+}
+
+func (t safeRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := validateHTTPURL(req.Context(), req.URL, t.policy); err != nil {
+		return nil, err
+	}
+	return t.transport.RoundTrip(req)
+}
+
+// dialContext resolves the host itself and connects only to addresses it has
+// already screened, so a name cannot resolve to a public address during the
+// check and a private one at connect time (DNS rebinding).
+func (p addressPolicy) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid network address: %w", err)
+	}
+	dialer := &net.Dialer{}
+	if p.exempt(host) {
+		return dialer.DialContext(ctx, network, address)
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %q: %w", host, err)
+	}
+	var allowed []netip.Addr
+	for _, ip := range ips {
+		if p.blocked(ip) {
+			return nil, fmt.Errorf("blocked network destination %q", ip)
+		}
+		allowed = append(allowed, ip)
+	}
+	if len(allowed) == 0 {
+		return nil, fmt.Errorf("resolve %q: no addresses", host)
+	}
+
+	var lastErr error
+	for _, ip := range allowed {
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("connect to %q: %w", host, lastErr)
+}
+
+func validateHTTPURL(ctx context.Context, u *url.URL, policy addressPolicy) error {
+	if u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return fmt.Errorf("invalid HTTP URL")
+	}
+	host := u.Hostname()
+	if ip, err := netip.ParseAddr(host); err == nil {
+		if policy.blocked(ip) {
+			return fmt.Errorf("blocked network destination %q", host)
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return fmt.Errorf("resolve %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("resolve %q: no addresses", host)
+	}
+	for _, ip := range ips {
+		if policy.blocked(ip) {
+			return fmt.Errorf("blocked network destination %q", host)
+		}
+	}
+	return nil
+}
+
 // Karena limiter ini dibagi, total bandwidth semua download akan dibatasi
 // bersama-sama. Pass nil untuk unlimited.
 func (d *Downloader) SetGlobalLimiter(lim *Limiter) {
@@ -321,15 +517,24 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 		return nil
 	}
 
-	client := &http.Client{Timeout: 0}
+	d.mu.RLock()
+	client := d.client
+	validator := d.etag
+	if validator == "" || strings.HasPrefix(validator, "W/") {
+		validator = d.modified
+	}
+	d.mu.RUnlock()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}
 
-	rangeHeader := fmt.Sprintf("bytes=%d-%d", start, ch.End)
-	req.Header.Set("Range", rangeHeader)
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, ch.End))
+	if downloaded > 0 && validator != "" {
+		req.Header.Set("If-Range", validator)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -337,21 +542,42 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+	expected := ch.End - start + 1
+	if resp.StatusCode == http.StatusPartialContent {
+		gotStart, gotEnd, gotTotal, err := parseContentRange(resp.Header.Get("Content-Range"))
+		if err != nil {
+			return err
+		}
+		if gotStart != start || gotEnd != ch.End || gotTotal != d.totalSize {
+			return fmt.Errorf("content-range mismatch: got bytes %d-%d/%d, want %d-%d/%d", gotStart, gotEnd, gotTotal, start, ch.End, d.totalSize)
+		}
+	} else if resp.StatusCode == http.StatusOK {
+		if start != 0 || ch.Start != 0 || ch.End != d.totalSize-1 || len(d.chunks) != 1 {
+			return fmt.Errorf("server ignored range request for partial download")
+		}
+	} else {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+	if resp.ContentLength >= 0 && resp.ContentLength != expected {
+		return fmt.Errorf("content length mismatch: got %d, want %d", resp.ContentLength, expected)
 	}
 
 	buf := make([]byte, readBufSize)
 	written := start
 	chunkDownloaded := downloaded
-	for {
+	remaining := expected
+	for remaining > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		n, err := resp.Body.Read(buf)
+		readBuf := buf
+		if int64(len(readBuf)) > remaining {
+			readBuf = readBuf[:remaining]
+		}
+		n, err := resp.Body.Read(readBuf)
 		if n > 0 {
 			// Throttle jika limiter aktif. Tunggu global dulu lalu per-download;
 			// karena keduanya harus lolos, yang paling ketat jadi bottleneck.
@@ -359,12 +585,12 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 			lim, glim := d.limiter, d.globalLim
 			d.mu.RUnlock()
 			if glim != nil {
-				if werr := glim.Wait(ctx, n); werr != nil {
+				if werr := glim.Wait(ctx, int(n)); werr != nil {
 					return werr
 				}
 			}
 			if lim != nil {
-				if werr := lim.Wait(ctx, n); werr != nil {
+				if werr := lim.Wait(ctx, int(n)); werr != nil {
 					return werr
 				}
 			}
@@ -374,6 +600,7 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 			}
 			written += int64(n)
 			chunkDownloaded += int64(n)
+			remaining -= int64(n)
 
 			d.mu.Lock()
 			d.progress.Chunks[ch.Index].DownloadedSize = chunkDownloaded
@@ -383,14 +610,51 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 			// every read, to avoid hammering the single DB connection.
 		}
 		if err == io.EOF {
+			if remaining != 0 {
+				return fmt.Errorf("short response body: missing %d bytes", remaining)
+			}
 			break
 		}
 		if err != nil {
 			return fmt.Errorf("read body: %w", err)
 		}
 	}
+	var extra [1]byte
+	if n, err := resp.Body.Read(extra[:]); n != 0 || (err != nil && err != io.EOF) {
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("check response boundary: %w", err)
+		}
+		return fmt.Errorf("response body exceeds requested range")
+	}
 
 	return nil
+}
+
+func parseContentRange(value string) (start, end, total int64, err error) {
+	if !strings.HasPrefix(value, "bytes ") {
+		return 0, 0, 0, fmt.Errorf("missing or invalid content-range")
+	}
+	parts := strings.Split(strings.TrimPrefix(value, "bytes "), "/")
+	if len(parts) != 2 || parts[1] == "*" {
+		return 0, 0, 0, fmt.Errorf("invalid content-range %q", value)
+	}
+	bounds := strings.Split(parts[0], "-")
+	if len(bounds) != 2 {
+		return 0, 0, 0, fmt.Errorf("invalid content-range %q", value)
+	}
+	start, err = strconv.ParseInt(bounds[0], 10, 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid content-range %q", value)
+	}
+	end, err = strconv.ParseInt(bounds[1], 10, 64)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("invalid content-range %q", value)
+	}
+	total, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || start < 0 || end < start || total <= end {
+		return 0, 0, 0, fmt.Errorf("invalid content-range %q", value)
+	}
+	return start, end, total, nil
 }
 
 func (d *Downloader) trackSpeed(ctx context.Context, lastDownloaded *int64) {
@@ -493,12 +757,27 @@ type FileInfo struct {
 	Size          int64
 	SupportsRange bool
 	Filename      string
+	ETag          string
+	LastModified  string
 }
 
-func GetFileInfo(url string) (*FileInfo, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+func GetFileInfo(rawURL, proxyURL string, allowLocal bool) (*FileInfo, error) {
+	u, err := url.ParseRequestURI(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("invalid HTTP URL")
+	}
+	client := newHTTPClient(proxyURL, 15*time.Second, allowLocal)
+	policy := addressPolicy{allowLocal: allowLocal}
+	if proxyURL != "" {
+		if pu, perr := url.Parse(proxyURL); perr == nil {
+			policy.proxyHost = pu.Hostname()
+		}
+	}
+	if err := validateHTTPURL(context.Background(), u, policy); err != nil {
+		return nil, err
+	}
 
-	req, err := http.NewRequest(http.MethodHead, url, nil)
+	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create head request: %w", err)
 	}
@@ -508,6 +787,9 @@ func GetFileInfo(url string) (*FileInfo, error) {
 		return nil, fmt.Errorf("head request: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("head request returned %s", resp.Status)
+	}
 
 	info := &FileInfo{}
 
@@ -524,35 +806,76 @@ func GetFileInfo(url string) (*FileInfo, error) {
 	contentRange := resp.Header.Get("Content-Range")
 
 	info.SupportsRange = acceptRanges == "bytes" || contentRange != ""
-	info.Filename = extractFilename(resp, url)
+	info.ETag = strings.TrimSpace(resp.Header.Get("ETag"))
+	info.LastModified = strings.TrimSpace(resp.Header.Get("Last-Modified"))
+	info.Filename, err = extractFilename(resp, rawURL)
+	if err != nil {
+		return nil, err
+	}
 
 	return info, nil
 }
 
-func extractFilename(resp *http.Response, url string) string {
+func extractFilename(resp *http.Response, rawURL string) (string, error) {
 	cd := resp.Header.Get("Content-Disposition")
 	if cd != "" {
-		if idx := strings.Index(cd, "filename="); idx != -1 {
-			f := cd[idx+9:]
-			f = strings.Trim(f, `" `)
-			if f != "" {
-				return f
-			}
+		_, params, err := mime.ParseMediaType(cd)
+		if err != nil {
+			return "", fmt.Errorf("parse content-disposition: %w", err)
+		}
+		if f := params["filename"]; f != "" {
+			return ValidateFilename(f)
 		}
 	}
 
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		name := parts[len(parts)-1]
-		if idx := strings.Index(name, "?"); idx != -1 {
-			name = name[:idx]
-		}
-		if name != "" {
-			return name
+	u, err := url.Parse(rawURL)
+	if err == nil {
+		name, unescapeErr := url.PathUnescape(path.Base(u.EscapedPath()))
+		if unescapeErr == nil && name != "" && name != "." && name != "/" {
+			return ValidateFilename(name)
 		}
 	}
 
-	return "download"
+	return "download", nil
+}
+
+// ValidateFilename accepts exactly one portable filesystem path component.
+func ValidateFilename(name string) (string, error) {
+	if name == "" || name == "." || name == ".." || len([]byte(name)) > 255 {
+		return "", fmt.Errorf("invalid filename")
+	}
+	if strings.ContainsAny(name, `/\\`) || strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return "", fmt.Errorf("filename must be a single path component")
+	}
+	for _, r := range name {
+		if r == 0 || unicode.IsControl(r) || strings.ContainsRune(`<>:"|?*`, r) {
+			return "", fmt.Errorf("filename contains invalid characters")
+		}
+	}
+	base := strings.ToUpper(strings.TrimSuffix(name, filepath.Ext(name)))
+	reserved := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+	if reserved[base] || (len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9') {
+		return "", fmt.Errorf("filename is reserved by the operating system")
+	}
+	return name, nil
+}
+
+// SafeDownloadPath verifies that filename cannot escape root.
+func SafeDownloadPath(root, filename string) (string, error) {
+	name, err := ValidateFilename(filename)
+	if err != nil {
+		return "", err
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve download directory: %w", err)
+	}
+	dst := filepath.Join(absRoot, name)
+	rel, err := filepath.Rel(absRoot, dst)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("download path escapes destination directory")
+	}
+	return dst, nil
 }
 
 func VerifyDownload(filePath string, expectedSize int64) error {
@@ -575,14 +898,62 @@ func CleanupFile(filePath string) error {
 	return nil
 }
 
-// MoveFile moves src to dst. It first tries an atomic os.Rename; if that fails
-// because src and dst live on different filesystems (EXDEV), it falls back to
-// a copy followed by removing the source.
-func MoveFile(src, dst string) error {
+// ErrDestinationExists reports that the destination file is already present.
+// Callers can offer the user Keep Both / Replace / Cancel instead of failing.
+var ErrDestinationExists = errors.New("destination already exists")
+
+// UniqueDownloadPath returns dst when it is free, otherwise the first available
+// "name (n).ext" variant. It is advisory: the final create still uses O_EXCL,
+// so a race loses safely rather than overwriting.
+func UniqueDownloadPath(dst string) (string, error) {
+	if _, err := os.Lstat(dst); errors.Is(err, os.ErrNotExist) {
+		return dst, nil
+	} else if err != nil {
+		return "", fmt.Errorf("stat destination: %w", err)
+	}
+
+	dir := filepath.Dir(dst)
+	base := filepath.Base(dst)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+
+	for i := 1; i < 10000; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		if _, err := os.Lstat(candidate); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("stat destination: %w", err)
+		}
+	}
+	return "", fmt.Errorf("no available filename for %s", dst)
+}
+
+// ReplaceFile moves src onto dst, overwriting an existing destination.
+// Only call this after the user has explicitly chosen to replace.
+func ReplaceFile(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
 		return nil
 	} else if !errors.Is(err, syscall.EXDEV) {
-		return fmt.Errorf("rename %s -> %s: %w", src, dst, err)
+		return fmt.Errorf("replace %s: %w", dst, err)
+	}
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove existing destination: %w", err)
+	}
+	return MoveFile(src, dst)
+}
+
+// MoveFile moves src to dst without replacing an existing destination.
+// It returns ErrDestinationExists when dst is already taken.
+func MoveFile(src, dst string) error {
+	if err := os.Link(src, dst); err == nil {
+		if err := os.Remove(src); err != nil {
+			return fmt.Errorf("remove source after link: %w", err)
+		}
+		return nil
+	} else if errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("%w: %s", ErrDestinationExists, dst)
+	} else if !errors.Is(err, syscall.EXDEV) {
+		return fmt.Errorf("link %s -> %s: %w", src, dst, err)
 	}
 
 	in, err := os.Open(src)
@@ -591,8 +962,11 @@ func MoveFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%w: %s", ErrDestinationExists, dst)
+		}
 		return fmt.Errorf("create dest: %w", err)
 	}
 

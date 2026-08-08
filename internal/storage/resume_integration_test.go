@@ -78,6 +78,8 @@ func buildDownloaderFromDB(t *testing.T, sm *StateManager, id int64, url, tmp st
 		defs[i] = core.Chunk{Index: c.ChunkIndex, Start: c.StartByte, End: c.EndByte, Downloaded: c.DownloadedSize}
 	}
 	d := core.NewDownloader(url, tmp, dl.TotalSize, defs, dl.NumChunks, retries)
+	d.SetValidators(dl.ETag.String, dl.LastModified.String)
+	d.SetHTTPClient(&http.Client{Transport: http.DefaultTransport})
 	d.SetProgressCallback(func(ci int, size int64, status string) {
 		sm.UpdateChunkProgress(id, ci, size, status)
 	})
@@ -97,7 +99,8 @@ func TestPauseResumeEndToEnd(t *testing.T) {
 	defer sm.Close()
 
 	numChunks := 4
-	id, err := sm.CreateDownload(srv.URL, "file.bin", int64(len(data)), true, numChunks)
+	saveDir := t.TempDir()
+	id, err := sm.CreateDownload(srv.URL, "file.bin", saveDir, "", int64(len(data)), true, numChunks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +114,7 @@ func TestPauseResumeEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tmp := filepath.Join(t.TempDir(), "file.tmp.bin")
+	tmp := filepath.Join(saveDir, "file.tmp.bin")
 
 	// --- First run: start, then PAUSE mid-flight ---
 	d1 := buildDownloaderFromDB(t, sm, id, srv.URL, tmp, 3)
@@ -123,7 +126,7 @@ func TestPauseResumeEndToEnd(t *testing.T) {
 		firstErr = d1.Start(context.Background())
 	}()
 	time.Sleep(150 * time.Millisecond) // let some bytes land
-	d1.Cancel()                          // pause
+	d1.Cancel()                        // pause
 	sm.UpdateDownloadStatus(id, "paused")
 	wg.Wait()
 	t.Logf("first run returned: %v", firstErr)

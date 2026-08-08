@@ -28,6 +28,7 @@ func TestDownloaderRespectsLimiter(t *testing.T) {
 
 	chunks := CalculateChunks(size, 4)
 	d := NewDownloader(srv.URL, dst, size, chunks, 4, 0)
+	d.client = httptestClient()
 
 	// 256 KiB/s untuk 256 KiB => ~1 detik.
 	d.SetGlobalLimiter(NewLimiter(256 * 1024))
@@ -71,6 +72,7 @@ func TestDownloaderUnthrottledIsFaster(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "out.bin")
 	chunks := CalculateChunks(size, 4)
 	d := NewDownloader(srv.URL, dst, size, chunks, 4, 0)
+	d.client = httptestClient()
 
 	start := time.Now()
 	if err := d.Start(context.Background()); err != nil {
@@ -105,6 +107,7 @@ func TestGlobalLimiterSharedAcrossDownloads(t *testing.T) {
 		dst := filepath.Join(tmpDir, "out"+strconv.Itoa(i)+".bin")
 		chunks := CalculateChunks(size, 2)
 		d := NewDownloader(srv.URL, dst, size, chunks, 2, 0)
+		d.client = httptestClient()
 		d.SetGlobalLimiter(shared)
 		go func() { done <- d.Start(context.Background()) }()
 	}
@@ -143,6 +146,7 @@ func TestPerDownloadLimiterIsolation(t *testing.T) {
 	mk := func(name string, limit int64) (*Downloader, string) {
 		dst := filepath.Join(tmpDir, name)
 		d := NewDownloader(srv.URL, dst, size, CalculateChunks(size, 4), 4, 0)
+		d.client = httptestClient()
 		if limit > 0 {
 			d.SetLimiter(NewLimiter(limit))
 		}
