@@ -8,9 +8,17 @@ family. The Chromium extension identity is fixed as
 
 ## Linux
 
-Run `./install.sh` to build the native host and install manifests for detected
-browsers. Use `--firefox` or `--chromium` to limit the browser family and
-`--uninstall` to remove the native host and every supported manifest.
+For normal installation, download
+`Lunefetch-Setup-<version>-linux-amd64.run` from the GitHub release, make it
+executable, and run it. The per-user installer installs the desktop application,
+application-menu shortcut, native host, and manifests for detected browsers.
+Administrator access is not required. Run `~/.local/opt/lunefetch/uninstall` to
+remove the application and native-host integration.
+
+Developers using a source checkout can run `./install.sh` to build only the
+native host and install manifests for detected browsers. Use `--firefox` or
+`--chromium` to limit the browser family and `--uninstall` to remove that
+developer installation.
 
 | Browser | Native messaging manifest directory |
 |---------|-------------------------------------|
@@ -22,8 +30,8 @@ browsers. Use `--firefox` or `--chromium` to limit the browser family and
 | Microsoft Edge | `~/.config/microsoft-edge/NativeMessagingHosts/` |
 | Vivaldi | `~/.config/vivaldi/NativeMessagingHosts/` |
 
-The native host binary is installed at
-`~/.local/bin/lunefetch-native-host`. Re-running the installer upgrades it in
+The application and native host are installed below `~/.local/opt/lunefetch`,
+with stable links in `~/.local/bin`. Re-running the installer upgrades them in
 place without changing either extension identity.
 
 ## Windows
@@ -46,15 +54,10 @@ The developer script writes into `%LOCALAPPDATA%\Lunefetch`. Both register
 per-user `HKCU` native messaging entries for Firefox, Chrome, Chromium, Brave,
 Edge, and Vivaldi.
 
-## Extension Packages
+## Browser Extensions
 
-Release archives are in `extension/dist/`. Verify them before installation:
-
-```sh
-cd extension/dist
-sha256sum -c SHA256SUMS
-```
-
-Firefox release packages are distributed through Firefox Add-ons. Chromium
-release packages are distributed through the Chrome Web Store. Development
-archives can be loaded temporarily from the corresponding unpacked directory.
+Install browser extensions separately from their official stores. Installers do
+not bundle or silently install extensions. Firefox releases are distributed
+through [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/lunefetch/),
+and Chromium releases are distributed through the Chrome Web Store. Development
+archives can still be built from source and loaded temporarily.

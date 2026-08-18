@@ -23,31 +23,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: extension/package-lock.json
       - name: Install Fyne build dependencies
         run: sudo apt-get update && sudo apt-get install -y gcc libgl1-mesa-dev libwayland-dev libxkbcommon-dev xorg-dev
       - name: Validate release version
         run: scripts/check-version.sh
-      - name: Install extension tooling
-        working-directory: extension
-        run: npm ci
-      - name: Build deterministic extension packages
-        working-directory: extension
-        run: ./build.sh && (cd dist && sha256sum -c SHA256SUMS)
-      - name: Build Linux binaries
+      - name: Build Linux installer
         run: |
-          VERSION=$(tr -d '[:space:]' < VERSION)
-          mkdir -p dist
-          go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch ./
-          go build -ldflags "-X main.version=$VERSION" -o dist/lunefetch-native-host ./cmd/native-host/
-      - name: Stage release artifacts
-        run: |
-          cp extension/dist/lunefetch-*.zip extension/dist/RELEASE_NOTES.md dist/
-          (cd dist && sha256sum lunefetch lunefetch-native-host lunefetch-firefox.zip lunefetch-chromium.zip > SHA256SUMS)
+          chmod +x scripts/build-linux-installer.sh
+          scripts/build-linux-installer.sh
+      - name: Installed package lifecycle smoke test
+        run: scripts/test-install-linux.sh
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
@@ -56,8 +41,9 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          body_path: extension/dist/RELEASE_NOTES.md
-          files: dist/*
+          body: |
+            Download the installer for your platform. Browser extensions are installed separately from the official browser stores.
+          files: dist/Lunefetch-Setup-*-linux-amd64.run
 
   windows:
     needs: package
@@ -90,19 +76,10 @@ jobs:
         run: |
           $Version = (Get-Content ./VERSION -Raw).Trim()
           ./scripts/test-windows-package.ps1 -Installer "./dist/Lunefetch-Setup-$Version-windows-amd64.exe"
-      - name: Generate Windows installer checksum
-        shell: pwsh
-        run: |
-          $Version = (Get-Content ./VERSION -Raw).Trim()
-          $Name = "Lunefetch-Setup-$Version-windows-amd64.exe"
-          $Hash = (Get-FileHash "./dist/$Name" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$Hash  $Name" | Set-Content "./dist/$Name.sha256" -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: lunefetch-windows-installer
-          path: |
-            dist/Lunefetch-Setup-*-windows-amd64.exe
-            dist/Lunefetch-Setup-*-windows-amd64.exe.sha256
+          path: dist/Lunefetch-Setup-*-windows-amd64.exe
 
   windows-clean-install:
     needs: windows
@@ -118,17 +95,12 @@ jobs:
         run: |
           $Version = (Get-Content ./VERSION -Raw).Trim()
           $Name = "Lunefetch-Setup-$Version-windows-amd64.exe"
-          $Expected = (Get-Content "./dist/$Name.sha256" -Raw).Split()[0]
-          $Actual = (Get-FileHash "./dist/$Name" -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($Actual -ne $Expected) { throw "Windows installer checksum mismatch" }
           ./scripts/test-windows-package.ps1 -Installer "./dist/$Name"
       - name: Add Windows installer to GitHub release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/Lunefetch-Setup-*-windows-amd64.exe
-            dist/Lunefetch-Setup-*-windows-amd64.exe.sha256
+          files: dist/Lunefetch-Setup-*-windows-amd64.exe
 
   firefox:
     if: github.event_name == 'workflow_dispatch' && inputs.publish_stores

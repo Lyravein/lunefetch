@@ -20,11 +20,29 @@ A high-performance, keyboard-first download manager built with Go and Fyne.
 
 ## Installation
 
-### Prerequisites
-- Go 1.22 or later
+### Installers
+
+Download the installer for your platform from the latest GitHub release. The
+Linux `.run` installer and Windows `.exe` installer install the desktop app,
+native messaging host, application shortcut, and supported browser manifests
+automatically. They do not bundle or silently install browser extensions.
+
+After running an installer, install the extension manually from the official
+browser store. Firefox users can use [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/lunefetch/).
+
+The Linux installer is per-user and does not require `sudo`. It can be removed
+with:
+
+```bash
+~/.local/opt/lunefetch/uninstall
+```
+
+### Source Build Prerequisites
+
+- Go 1.26 or later
 - Fyne v2.x framework
 
-### Build
+For source builds:
 ```bash
 git clone https://github.com/Lyravein/lunefetch.git
 cd lunefetch
@@ -41,7 +59,8 @@ It intercepts supported HTTP/HTTPS downloads and sends their URLs to the local
 Lunefetch application through Firefox Native Messaging.
 
 The extension requires both the desktop application and its native messaging
-host. On Linux, run the repository installer to build and register the host:
+host. The platform installer registers the host automatically. For a source
+checkout, run:
 
 ```bash
 ./install.sh --firefox
