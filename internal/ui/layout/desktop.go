@@ -87,6 +87,7 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 		onDownloadsRoute: true,
 		stopCh:           make(chan struct{}),
 	}
+	guiApp.configureSystemTray()
 
 	// Initialise global limiter from config.
 	if cfg.GlobalSpeedLimit > 0 {
@@ -165,11 +166,43 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 
 	guiApp.registerShortcuts(toolbar)
 	w.SetCloseIntercept(func() {
+		if cfg.CloseToTray {
+			w.Hide()
+			return
+		}
 		guiApp.Shutdown()
 		w.Close()
 	})
 
 	return guiApp
+}
+
+func (a *App) configureSystemTray() {
+	desk, ok := a.fyneApp.(desktop.App)
+	if !ok {
+		return
+	}
+	show := func() {
+		a.window.Show()
+		a.window.RequestFocus()
+	}
+	quit := func() {
+		a.Shutdown()
+		a.fyneApp.Quit()
+	}
+	desk.SetSystemTrayMenu(fyne.NewMenu("Lunefetch",
+		fyne.NewMenuItem("Open Lunefetch", show),
+		fyne.NewMenuItem("Add download", func() {
+			show()
+			components.ShowAddURLDialog(a.window, a.cfg, a.AddURLCh)
+		}),
+		fyne.NewMenuItemSeparator(),
+		fyne.NewMenuItem("Quit", quit),
+	))
+	desk.SetSystemTrayWindow(a.window)
+	if icon, err := fyne.LoadResourceFromPath("lunefetch.ico"); err == nil {
+		desk.SetSystemTrayIcon(icon)
+	}
 }
 
 // registerShortcuts wires global keyboard shortcuts onto the window canvas.

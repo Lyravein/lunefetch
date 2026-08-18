@@ -80,7 +80,7 @@ func NewToolbarFull(
 	// the middle of a wide window.
 	searchBox := container.New(layout.NewGridWrapLayout(fyne.NewSize(320, 32)), searchEntry)
 
-	btnSettings := widget.NewButtonWithIcon("", theme.SettingsIcon(), func() {
+	btnSettings := widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), func() {
 		ShowSettingsDialog(w, cfg, globalLimiter, qm)
 	})
 	btnSettings.Importance = widget.LowImportance

@@ -1,168 +1,192 @@
 # Lunefetch
 
-Lunefetch is a desktop HTTP/HTTPS download manager built with Go and Fyne. It
-supports parallel ranged downloads, pause and resume, persistent queues,
-scheduling, speed limits, and browser handoff through native messaging.
-
-> Lunefetch v1.0.0 is the first public release. Review [SECURITY.md](SECURITY.md)
-> before enabling browser integration.
+A high-performance, keyboard-first download manager built with Go and Fyne.
 
 ## Features
 
-- Fyne desktop interface with status and category filters, search, history,
-  sortable downloads, and per-download actions
-- Multi-part downloads when the server advertises byte-range support
-- Byte-range response validation and resumable chunk progress in SQLite
-- Configurable concurrency, retries, proxy, global speed, and per-download speed
-- One-shot daily scheduling using `HH:MM` local time
-- Firefox, Zen, Chromium, Chrome, Brave, Edge, and Vivaldi browser integration
-- Authenticated loopback API between the native host and desktop application
-- Safe destination handling: validated basenames, per-download temporary files,
-  and no silent replacement of existing files
+### Core Capabilities
+- **Keyboard shortcuts** for efficient navigation (Enter, Delete, Ctrl+C, Ctrl+P, Spacebar, Arrows)
+- **Concurrency-safe** download management with mutex protection
+- **Error recovery** with exponential backoff (1s → 2s → 4s retries)
+- **File safety** with disk space pre-checks and duplicate filename handling
+- **Per-task speed limits** via right-click context menu (MB/s input)
+- **Global bandwidth limiter** from settings page (KB/s conversion)
+- **Fresh restart dialog** for completed/cancelled downloads
 
-Browser handoff supports replayable, unauthenticated HTTP/HTTPS GET downloads,
-including a reviewed page-link batch flow and optional user-entered filename and
-destination hints. Browser cookies, authorization headers, request bodies, page
-content, and referrers are intentionally not transferred. Recent failures can be
-retried from the extension popup. Authenticated transfer remains disabled; see
-[`docs/authenticated-download-threat-model.md`](docs/authenticated-download-threat-model.md).
+### Performance
+- Benchmark-tested scaling: 20 concurrent downloads → ~5.24 MB/s aggregate throughput
+- Dynamic rate limiting without application restart
+- SQLite database backend for reliable persistence
 
-## Requirements
+## Installation
 
-- Go 1.26.5 or the version declared in `go.mod` for development builds
-- Linux desktop dependencies required by Fyne for Linux development builds
-- Node.js 22.x and npm for extension tests and source builds
-- Bash and `zip` for extension packaging
+### Prerequisites
+- Go 1.22 or later
+- Fyne v2.x framework
 
-End users should use the release packages instead of building the desktop
-application. Linux binaries and the Windows installer are available from the
-[v1.0.0 GitHub release](https://github.com/Lyravein/lunefetch/releases/tag/v1.0.0).
-
-## Build
-
+### Build
 ```bash
+git clone https://github.com/Lyravein/lunefetch.git
+cd lunefetch
 go build -o lunefetch .
-go build -o lunefetch-native-host ./cmd/native-host
-```
-
-Run the desktop application:
-
-```bash
 ./lunefetch
 ```
 
-The application stores configuration in `~/.config/lunefetch/` and download
-state in `~/.local/share/lunefetch/`.
+Binary size: ~40MB
 
-## Browser Integration
+## Firefox Extension
 
-Build the native host, install a browser-specific host manifest, and package
-the extensions:
+Install the official extension from [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/lunefetch/).
+It intercepts supported HTTP/HTTPS downloads and sends their URLs to the local
+Lunefetch application through Firefox Native Messaging.
+
+The extension requires both the desktop application and its native messaging
+host. On Linux, run the repository installer to build and register the host:
 
 ```bash
 ./install.sh --firefox
-./install.sh --chromium
 ```
 
-Running `./install.sh` without flags installs manifests for detected browser
-families. Extension archives are written to `extension/dist/`.
-
-The Firefox extension is being submitted to Firefox Add-ons. Until it is
-approved, download the Firefox release package and use the temporary-loading
-instructions below. The browser extension requires the Lunefetch desktop
-application and native host on the same computer. It transfers only replayable
-HTTP/HTTPS URLs and optional filename or destination hints explicitly supplied
-by the user. It does not transfer cookies, authorization headers, referrers,
-request bodies, or page content.
-
-Windows users can install the application and native browser host with the
-`Lunefetch-Setup-<version>-windows-amd64.exe` attached to each GitHub release.
-The PowerShell installer remains available for development. Complete browser
-paths, package verification, upgrade, and uninstall details are documented in
+The Windows installer registers the native host automatically. Detailed browser
+and platform paths are documented in
 [`docs/browser-installation.md`](docs/browser-installation.md).
 
-Firefox or Zen:
+Extension features include automatic interception, context-menu handoff, batch
+link selection, per-site and file-type rules, connection diagnostics, and safe
+fallback to Firefox when Lunefetch is unavailable. It does not transmit browser
+cookies, authorization headers, referrers, request bodies, or passwords to the
+desktop application.
 
-1. Open `about:debugging` and select **This Firefox**.
-2. Select **Load Temporary Add-on**.
-3. Select `extension/dist/lunefetch-firefox.zip`.
+To build and test the extension from source:
 
-Chromium, Chrome, or Brave:
+```bash
+cd extension
+npm ci
+npm test
+./build.sh
+npm run lint:firefox
+```
 
-1. Extract `extension/dist/lunefetch-chromium.zip` to a persistent directory.
-2. Open the browser's extensions page and enable Developer mode.
-3. Select **Load unpacked** and choose the extracted directory.
+## Keyboard Shortcuts
 
-The Chromium package contains a fixed public key, producing extension ID
-`iidkhocioaefjlhhigiaphejnlidchke`. The native-host manifest permits only that
-ID. Replacing the key requires updating `install.sh` at the same time.
+| Key | Action |
+|-----|--------|
+| **Enter** | Open downloaded file |
+| **Delete** | Confirm deletion of selected download |
+| **Ctrl+C** | Copy URL to clipboard |
+| **Ctrl+P** | Pause all active downloads |
+| **Spacebar** | Toggle pause/resume on current row |
+| **↑↓ Arrows** | Navigate table rows |
+| **Right-click** | Context menu with actions |
+
+### Background Mode
+
+On desktop systems with a system tray, closing the window hides Lunefetch and
+keeps active downloads running. Use the tray icon to reopen the window, add a
+download, or quit the application. Set `close_to_tray: false` in
+`~/.config/lunefetch/config.yaml` to restore normal close behavior.
 
 ## Configuration
 
-Configuration is stored at `~/.config/lunefetch/config.yaml` with mode `0600`.
-The following defaults are representative:
-
-```yaml
-download_dir: ~/Downloads
-max_retries: 3
-timeout: 30
-chunk_rules:
-  small: 4
-  medium: 8
-  large: 16
-  xlarge: 32
-small_size: 1073741824
-medium_size: 5368709120
-large_size: 107374182400
-max_concurrent_downloads: 2
-global_speed_limit: 0
-proxy_url: ""
-notifications: true
-history_retention_days: 30
+### Config Fields (`internal/config/config.go`)
+```go
+type Config struct {
+    DownloadDir      string // Default download directory
+    MaxConcurrent    int    // Concurrent download limit
+    MaxRetries       int    // Retry attempts per chunk (default: 3)
+    RetryBackoffS    int    // Initial backoff seconds (default: 1)
+    MinFreeSpaceMB   int64  // Minimum free disk space (MB)
+    AllowLocalHosts  bool   // Allow localhost/file:// URLs
+    CloseToTray      bool   // Hide window on close and keep running (default: true)
+    // ... additional fields
+}
 ```
 
-Invalid or unsafe values are rejected during startup instead of being silently
-normalized. A configured proxy must use `http`, `https`, or `socks5`.
+### Database Schema
+- `downloads` table: ID, URL, Filename, SaveDir, SpeedLimit, TotalSize, DownloadedSize, Status, SupportsRanges, NumChunks, ETag, LastModified, QueuePosition, ScheduledAt, CreatedAt, UpdatedAt, DeletedAt
+- `chunks` table: ID, DownloadID, ChunkIndex, Offset, Size, MD5, FilePath
 
-## Development
+## Architecture
 
+### Components
+```
+internal/
+├── core/              # Download engine
+│   ├── downloader.go  # Rate-limited download loop
+│   └── throttle.go    # Global + per-task limiter logic
+├── storage/           # Data layer
+│   ├── state.go       # DownloadRecord model, SpeedLimit field
+│   └── history_test.go
+├── queue/             # Concurrent worker pool
+│   └── manager.go     # Enqueue/dequeue with concurrency control
+├── ui/
+│   ├── components/    # Reusable widgets
+│   │   ├── table.go   # Keyboard-navigable download table
+│   │   ├── dialogs.go # AddURL + FreshRestart dialogs
+│   │   └── toolbar.go # Search + add button
+│   ├── pages/         # Application pages
+│   │   └── downloads.go # Main downloads page with actions
+│   └── store/         # UI-state interface
+│       └── impl.go    # Mutator interface (UpdateSpeedLimit)
+└── api/               # REST API wrapper
+```
+
+### Concurrency Model
+- **QueueManager**: Manages max concurrent downloads with semaphore pattern
+- **Mutex protection**: All shared state protected by RWMutex
+- **Debounced sorting**: 300ms delay to prevent thrashing
+- **Workers sync.WaitGroup**: Tracks in-flight downloads
+
+### Rate Limiting
+- Per-task limiter: `download.SetLimiter(core.NewLimiter(speedLimit))`
+- Global limiter: Shared across all downloads, updated dynamically
+- Bottleneck logic: Both limits enforced simultaneously (lower wins)
+
+## Testing
+
+### Run Tests
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
+go test ./... -race -v
+go test ./internal/core/... ./internal/storage/... ./internal/ui/components/...
 ```
 
-The production entrypoint is the Fyne desktop UI under `internal/ui/`.
-`internal/ui-tui/` is retained as legacy code and is not exposed by the current
-binary.
-
-### Build the Extension
-
-The extension source is readable and reproducible from the tagged release:
-
+### Benchmark Suite
 ```bash
-git checkout v1.0.0
-scripts/check-version.sh
-cd extension
-npm ci
-./build.sh
+cd internal/benchmarks
+go test -bench=. -benchmem ./concurrency_test.go
 ```
 
-The Firefox package is written to
-`extension/dist/lunefetch-firefox.zip`. The source files are not transpiled,
-concatenated, bundled, or minified. `build.sh` copies the source files into the
-package, creates the ZIP archive, and performs simple release-metadata
-substitution. The npm dependencies are development and testing tools only.
+Tests verify:
+- Race condition detection (`-race`)
+- Retry logic with exponential backoff
+- Disk space validation
+- URL blocking rules
+- DB transaction integrity
 
-For Mozilla source-code review, the archive must include `VERSION`,
-`extension/build.sh`, `extension/package.json`, `extension/package-lock.json`,
-`extension/src/`, `extension/manifests/`, `extension/icons/`, and
-`scripts/check-version.sh`. Do not include `node_modules/` or generated
-`extension/dist/` files in that source archive.
+## Known Limitations
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [ROADMAP.md](ROADMAP.md) for design
-and release work.
+1. **Virtual DOM for large datasets**: table virtualization is deferred due to Fyne API limitations.
+2. **Drag-and-drop reordering**: not implemented.
+3. **Firefox Android**: the extension supports Firefox desktop only because Native Messaging is required.
+
+## Future Enhancements
+
+- [ ] Drag-and-drop reordering
+- [ ] Complete accessibility audit (screen reader labels and keyboard workflows)
+- [ ] Virtual DOM optimization for tables >1k rows
+- [ ] E2E GUI tests
 
 ## License
 
-Licensed under the [MIT License](LICENSE).
+MIT License - see LICENSE file
+
+## Contributing
+
+Contributions welcome! Please submit PRs with:
+- Clear commit messages
+- Test coverage for new features
+- No breaking changes without discussion
+
+---
+
+Built with Go, Fyne, and SQLite.

@@ -21,6 +21,8 @@ type ChunkRules struct {
 type Config struct {
 	DownloadDir          string     `yaml:"download_dir"`
 	MaxRetries           int        `yaml:"max_retries"`
+	RetryBackoffS        int        `yaml:"retry_backoff_s"`
+	MinFreeSpaceMB       int        `yaml:"min_free_space_mb"`
 	Timeout              int        `yaml:"timeout"`
 	ChunkRules           ChunkRules `yaml:"chunk_rules"`
 	SmallSize            int64      `yaml:"small_size"`
@@ -30,6 +32,7 @@ type Config struct {
 	GlobalSpeedLimit     int64      `yaml:"global_speed_limit"` // bytes/sec, 0 = unlimited
 	ProxyURL             string     `yaml:"proxy_url"`          // "http://host:port", "socks5://host:port", "" = no proxy
 	Notifications        bool       `yaml:"notifications"`
+	CloseToTray          bool       `yaml:"close_to_tray"`
 	HistoryRetentionDays int        `yaml:"history_retention_days"` // 0 = selamanya
 
 	// AllowLocalHosts mengizinkan download dari LAN, loopback, dan link-local
@@ -49,9 +52,11 @@ func (c *Config) SetPath(p string) {
 
 func Default() *Config {
 	return &Config{
-		DownloadDir: filepath.Join(os.Getenv("HOME"), "Downloads"),
-		MaxRetries:  3,
-		Timeout:     30,
+		DownloadDir:    filepath.Join(os.Getenv("HOME"), "Downloads"),
+		MaxRetries:     3,
+		RetryBackoffS:  1,
+		MinFreeSpaceMB: 100,
+		Timeout:        30,
 		ChunkRules: ChunkRules{
 			Small:  4,
 			Medium: 8,
@@ -63,6 +68,7 @@ func Default() *Config {
 		LargeSize:            100 * (1 << 30), // 100 GB
 		MaxConcurrent:        2,
 		Notifications:        true,
+		CloseToTray:          true,
 		HistoryRetentionDays: 30,
 	}
 }
@@ -88,6 +94,12 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxRetries < 0 || c.MaxRetries > 20 {
 		return fmt.Errorf("max_retries must be between 0 and 20")
+	}
+	if c.RetryBackoffS < 1 || c.RetryBackoffS > 300 {
+		return fmt.Errorf("retry_backoff_s must be between 1 and 300 seconds")
+	}
+	if c.MinFreeSpaceMB < 0 || c.MinFreeSpaceMB > 100000 {
+		return fmt.Errorf("min_free_space_mb must be between 0 and 100000 MB")
 	}
 	if c.Timeout < 1 || c.Timeout > 3600 {
 		return fmt.Errorf("timeout must be between 1 and 3600 seconds")

@@ -20,10 +20,10 @@ import (
 var colHeaders = []string{"#", "Name", "Size", "Progress", "Speed", "Status", "Added", ""}
 
 // colWidths defines the initial width for each column.
-var colWidths = []float32{34, 350, 80, 160, 80, 80, 120, 10}
+var colWidths = []float32{54, 350, 80, 160, 80, 80, 120, 10}
 
 // colMinWidths defines the minimum width used by responsive resizing.
-var colMinWidths = []float32{28, 60, 42, 60, 44, 66, 42, 10}
+var colMinWidths = []float32{48, 60, 42, 60, 44, 66, 42, 10}
 
 // headerHeight is the height of the custom (always visible) header row.
 const headerHeight = 34
@@ -183,9 +183,12 @@ type DownloadTable struct {
 
 	headerLabels []*tapLabel
 
-	onSort   func(col store.TableColumn, asc bool)
-	onSelect func(id int64)
-	onAction func(id int64, action string)
+	onSort       func(col store.TableColumn, asc bool)
+	onSelect     func(id int64)
+	onAction     func(id int64, action string)
+	onBulkAction func(ids []int64, action string)
+
+	multiHandler *multiSelectHandler
 }
 
 // NewDownloadTable creates a new DownloadTable.
@@ -193,17 +196,20 @@ func NewDownloadTable(
 	onSort func(col store.TableColumn, asc bool),
 	onSelect func(id int64),
 	onAction func(id int64, action string),
+	onBulkAction func(ids []int64, action string),
 ) *DownloadTable {
 	dt := &DownloadTable{
-		speeds:   make(map[int64]float64),
-		selected: -1,
-		sortCol:  store.ColAdded,
-		sortAsc:  true,
-		onSort:   onSort,
-		onSelect: onSelect,
-		onAction: onAction,
-		widths:   append([]float32(nil), colWidths...),
+		speeds:       make(map[int64]float64),
+		selected:     -1,
+		sortCol:      store.ColAdded,
+		sortAsc:      true,
+		onSort:       onSort,
+		onSelect:     onSelect,
+		onAction:     onAction,
+		onBulkAction: onBulkAction,
+		widths:       append([]float32(nil), colWidths...),
 	}
+	dt.multiHandler = newMultiSelectHandler(dt)
 
 	dt.table = widget.NewTable(
 		func() (int, int) { return len(dt.records), len(colHeaders) },
@@ -211,29 +217,33 @@ func NewDownloadTable(
 		// Template cell: progress bar, labels and action button stacked; visibility
 		// is controlled per cell in the update func.
 		func() fyne.CanvasObject {
-			bar := widget.NewProgressBar()
-			bar.Min = 0
-			bar.Max = 1
+			background := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
+			progress := canvas.NewRectangle(theme.Color(theme.ColorNamePrimary))
+			check := widget.NewCheck("", nil)
 			lbl := widget.NewLabel("")
 			lbl.Truncation = fyne.TextTruncateEllipsis
 			status := canvas.NewText("", theme.Color(theme.ColorNameForeground))
 			status.Alignment = fyne.TextAlignLeading
 			status.TextSize = theme.Size(theme.SizeNameText)
-			btn := widget.NewButtonWithIcon("", theme.MoreVerticalIcon(), nil)
+			btn := widget.NewButtonWithIcon("Actions", theme.MoreVerticalIcon(), nil)
 			btn.Importance = widget.LowImportance
-			return container.NewStack(bar, lbl, status, btn)
+			return container.NewStack(background, progress, check, lbl, status, btn)
 		},
 
 		func(id widget.TableCellID, o fyne.CanvasObject) {
 			c := o.(*fyne.Container)
-			bar := c.Objects[0].(*widget.ProgressBar)
-			lbl := c.Objects[1].(*widget.Label)
-			status := c.Objects[2].(*canvas.Text)
-			btn := c.Objects[3].(*widget.Button)
+			background := c.Objects[0].(*canvas.Rectangle)
+			progress := c.Objects[1].(*canvas.Rectangle)
+			check := c.Objects[2].(*widget.Check)
+			lbl := c.Objects[3].(*widget.Label)
+			status := c.Objects[4].(*canvas.Text)
+			btn := c.Objects[5].(*widget.Button)
 
 			row := id.Row
 			if row >= len(dt.records) {
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				status.Hide()
 				btn.Hide()
 				lbl.SetText("")
@@ -246,7 +256,9 @@ func NewDownloadTable(
 
 			// Action column — show only the ⋮ button.
 			if id.Col == len(colHeaders)-1 {
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Hide()
 				btn.Show()
 				btn.OnTapped = func() { dt.showRowMenu(rec, btn) }
@@ -256,36 +268,62 @@ func NewDownloadTable(
 
 			switch id.Col {
 			case 0: // Row number
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Show()
+				check.SetChecked(dt.multiHandler.isSelected(rec.ID))
+				check.OnChanged = func(checked bool) {
+					if checked != dt.multiHandler.isSelected(rec.ID) {
+						dt.multiHandler.toggle(rec.ID)
+					}
+				}
 				lbl.Show()
 				lbl.Alignment = fyne.TextAlignTrailing
 				lbl.SetText(fmt.Sprintf("%d", row+1))
 
 			case 1: // Name
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Show()
 				lbl.SetText(rec.Filename)
 
 			case 2: // Size
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Show()
 				lbl.Alignment = fyne.TextAlignTrailing
 				lbl.SetText(FormatSize(rec.TotalSize))
 
 			case 3: // Progress
+				check.Hide()
 				if rec.TotalSize > 0 {
 					pct := float64(rec.DownloadedSize) / float64(rec.TotalSize)
-					bar.SetValue(pct)
-					bar.Show()
+					if pct < 0 {
+						pct = 0
+					} else if pct > 1 {
+						pct = 1
+					}
+					background.Show()
+					progress.Show()
+					background.Resize(c.Size())
+					progress.Resize(fyne.NewSize(c.Size().Width*float32(pct), c.Size().Height))
+					progress.FillColor = hexToColor(progressBarColorHex(pct))
+					background.Refresh()
+					progress.Refresh()
 					lbl.Hide()
 				} else {
-					bar.Hide()
+					background.Hide()
+					progress.Hide()
 					lbl.Show()
 					lbl.SetText("—")
 				}
 
 			case 4: // Speed
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Show()
 				lbl.Alignment = fyne.TextAlignTrailing
 				if spd, ok := dt.speeds[rec.ID]; ok && spd > 0 {
@@ -295,7 +333,9 @@ func NewDownloadTable(
 				}
 
 			case 5: // Status
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Hide()
 				status.Text = statusText(rec.Status)
 				status.Color = statusColor(rec.Status)
@@ -303,7 +343,9 @@ func NewDownloadTable(
 				status.Refresh()
 
 			case 6: // Added
-				bar.Hide()
+				background.Hide()
+				progress.Hide()
+				check.Hide()
 				lbl.Show()
 				lbl.Alignment = fyne.TextAlignTrailing
 				lbl.SetText(humanDate(rec.CreatedAt))
@@ -406,8 +448,15 @@ func (dt *DownloadTable) SetWindow(w fyne.Window) { dt.window = w }
 func (dt *DownloadTable) SetRecords(records []*storage.DownloadRecord) {
 	fyne.Do(func() {
 		dt.records = records
+		valid := make(map[int64]bool, len(records))
 		for row := range records {
+			valid[records[row].ID] = true
 			dt.table.SetRowHeight(row, 38)
+		}
+		for id := range dt.multiHandler.selected {
+			if !valid[id] {
+				delete(dt.multiHandler.selected, id)
+			}
 		}
 		dt.table.Refresh()
 	})
@@ -459,6 +508,39 @@ func (dt *DownloadTable) showRowMenu(rec *storage.DownloadRecord, btn *widget.Bu
 	}
 
 	items := make([]*fyne.MenuItem, 0, 8)
+	selectedIDs := dt.multiHandler.getSelectedIDs()
+	if len(selectedIDs) > 1 {
+		fireSelected := func(action string) func() {
+			return func() {
+				for _, id := range selectedIDs {
+					if dt.onAction != nil {
+						dt.onAction(id, action)
+					}
+				}
+				dt.multiHandler.clearSelection()
+				dt.table.Refresh()
+			}
+		}
+		items = append(items,
+			fyne.NewMenuItem("Pause selected", fireSelected("pause")),
+			fyne.NewMenuItem("Resume selected", fireSelected("resume")),
+			fyne.NewMenuItem("Cancel selected", func() {
+				dt.multiHandler.clearSelection()
+				dt.table.Refresh()
+				if dt.onBulkAction != nil {
+					dt.onBulkAction(selectedIDs, "cancel")
+				}
+			}),
+			fyne.NewMenuItem("Remove selected", func() {
+				dt.multiHandler.clearSelection()
+				dt.table.Refresh()
+				if dt.onBulkAction != nil {
+					dt.onBulkAction(selectedIDs, "delete")
+				}
+			}),
+			fyne.NewMenuItemSeparator(),
+		)
+	}
 	switch rec.Status {
 	case "downloading":
 		items = append(items,

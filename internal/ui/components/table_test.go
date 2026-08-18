@@ -43,6 +43,61 @@ func TestContentWidthAccountsForChrome(t *testing.T) {
 	}
 }
 
+func TestMultiSelectTracksAndSortsIDs(t *testing.T) {
+	dt := &DownloadTable{records: []*storage.DownloadRecord{
+		{ID: 30}, {ID: 10}, {ID: 20},
+	}}
+	m := newMultiSelectHandler(dt)
+	m.toggle(30)
+	m.toggle(10)
+	m.toggle(20)
+	got := m.getSelectedIDs()
+	want := []int64{10, 20, 30}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("selected IDs = %v, want %v", got, want)
+		}
+	}
+	m.toggle(20)
+	if m.count() != 2 || m.isSelected(20) {
+		t.Fatalf("toggle did not remove ID 20: %v", m.getSelectedIDs())
+	}
+}
+
+func TestMultiSelectRangeUsesRecordOrder(t *testing.T) {
+	dt := &DownloadTable{records: []*storage.DownloadRecord{
+		{ID: 30}, {ID: 10}, {ID: 20}, {ID: 40},
+	}}
+	m := newMultiSelectHandler(dt)
+	m.mode = true
+	m.selectRange(10, 40)
+	got := m.getSelectedIDs()
+	want := []int64{10, 20, 40}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("range IDs = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestDownloadTableAcceptsBulkActionCallback(t *testing.T) {
+	var gotIDs []int64
+	var gotAction string
+	dt := NewDownloadTable(nil, nil, nil, func(ids []int64, action string) {
+		gotIDs = append([]int64(nil), ids...)
+		gotAction = action
+	})
+	dt.multiHandler.toggle(30)
+	dt.multiHandler.toggle(10)
+	dt.onBulkAction(dt.multiHandler.getSelectedIDs(), "delete")
+	if gotAction != "delete" {
+		t.Fatalf("bulk action = %q, want delete", gotAction)
+	}
+	if len(gotIDs) != 2 || gotIDs[0] != 10 || gotIDs[1] != 30 {
+		t.Fatalf("bulk IDs = %v, want [10 30]", gotIDs)
+	}
+}
+
 func TestSidebarSelectionAndMinimumWidth(t *testing.T) {
 	app := test.NewApp()
 	defer app.Quit()

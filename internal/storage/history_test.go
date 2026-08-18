@@ -135,6 +135,67 @@ func TestCreateDownloadWithChunksPersistsValidators(t *testing.T) {
 	}
 }
 
+// A download whose length the server never advertised is created with size 0
+// and an open-ended chunk; both must be corrected once the stream finishes.
+func TestUpdateTotalSizeFixesUnknownSizeDownload(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownloadWithChunks(
+		"https://example.com/stream.bin", "stream.bin", t.TempDir(), "", 0, false,
+		[]int64{0}, []int64{-1}, "", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sm.UpdateTotalSize(id, 4096); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := sm.GetDownload(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.TotalSize != 4096 {
+		t.Fatalf("TotalSize = %d, want 4096", rec.TotalSize)
+	}
+
+	chunks, err := sm.GetChunks(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("got %d chunks, want 1", len(chunks))
+	}
+	if chunks[0].EndByte != 4095 {
+		t.Fatalf("EndByte = %d, want 4095", chunks[0].EndByte)
+	}
+}
+
+// A non-positive size carries no information, so it must never overwrite a
+// size that is already known.
+func TestUpdateTotalSizeIgnoresNonPositiveSizes(t *testing.T) {
+	sm := newSM(t)
+	id, err := sm.CreateDownloadWithChunks(
+		"https://example.com/file.bin", "file.bin", t.TempDir(), "", 10, true,
+		[]int64{0}, []int64{9}, "", "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sm.UpdateTotalSize(id, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := sm.GetDownload(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.TotalSize != 10 {
+		t.Fatalf("TotalSize = %d, want the original 10", rec.TotalSize)
+	}
+}
+
 func TestReconcileInterruptedPausesOnlyRunningDownloads(t *testing.T) {
 	sm := newSM(t)
 	running := createDL(t, sm, "running.bin", "downloading")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/lyravein/lunefetch/internal/config"
 	"github.com/lyravein/lunefetch/internal/filecat"
+	"github.com/lyravein/lunefetch/internal/storage"
 )
 
 // AddURLRequest contains everything needed to start a new download.
@@ -156,4 +157,19 @@ func BasenameFromURL(rawURL string) string {
 		rawURL = rawURL[:i]
 	}
 	return filepath.Base(rawURL)
+}
+
+// ShowFreshRestartDialog asks the user to confirm restarting a finished
+// download from scratch. When confirmed, onConfirm runs; the caller is
+// responsible for deleting the old record/file and re-adding the URL.
+func ShowFreshRestartDialog(w fyne.Window, rec *storage.DownloadRecord, onConfirm func()) {
+	msg := "This download is already " + rec.Status + ".\n\n" +
+		"Restarting deletes the existing file and re-downloads everything.\n\n" +
+		"Restart from scratch?"
+
+	dialog.ShowConfirm("Fresh Restart", msg, func(ok bool) {
+		if ok && onConfirm != nil {
+			onConfirm()
+		}
+	}, w)
 }

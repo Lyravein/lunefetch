@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/netip"
 	"net/url"
 	"os"
@@ -225,9 +226,11 @@ func newHTTPClient(proxyURL string, timeout time.Duration, allowLocal bool) *htt
 	}
 	transport.DialContext = policy.dialContext
 
+	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Timeout:   timeout,
 		Transport: safeRoundTripper{transport: transport, policy: policy},
+		Jar:       jar,
 	}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -373,12 +376,29 @@ func (d *Downloader) Start(ctx context.Context) error {
 	d.mu.Unlock()
 	defer cancel()
 
+	// Check disk space before creating file
+	if err := DiskSpaceAvailable(filepath.Dir(d.filePath), d.totalSize); err != nil {
+		return err
+	}
+
 	var err error
 	d.file, err = os.OpenFile(d.filePath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
 	defer d.file.Close()
+
+	// A missing Content-Length cannot be represented by a finite range. Use one
+	// sequential request and discover the size while writing the response.
+	if d.totalSize <= 0 && len(d.chunks) == 1 && d.chunks[0].End < 0 {
+		err := d.startUnknownSize(ctx)
+		close(d.done)
+		d.flushProgress()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return err
+	}
 
 	if err := d.file.Truncate(d.totalSize); err != nil {
 		return fmt.Errorf("truncate file: %w", err)
@@ -445,6 +465,76 @@ func (d *Downloader) Start(ctx context.Context) error {
 		return fmt.Errorf("some chunks failed")
 	}
 
+	return nil
+}
+
+func (d *Downloader) startUnknownSize(ctx context.Context) error {
+	d.mu.RLock()
+	client := d.client
+	d.mu.RUnlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.url, nil)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+	if err := d.file.Truncate(0); err != nil {
+		return fmt.Errorf("truncate file: %w", err)
+	}
+
+	var total int64
+	buf := make([]byte, readBufSize)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			d.mu.RLock()
+			lim, glim := d.limiter, d.globalLim
+			d.mu.RUnlock()
+			if glim != nil {
+				if err := glim.Wait(ctx, n); err != nil {
+					return err
+				}
+			}
+			if lim != nil {
+				if err := lim.Wait(ctx, n); err != nil {
+					return err
+				}
+			}
+			if _, err := d.file.WriteAt(buf[:n], total); err != nil {
+				return fmt.Errorf("write at offset %d: %w", total, err)
+			}
+			total += int64(n)
+			d.mu.Lock()
+			d.progress.Chunks[0].DownloadedSize = total
+			d.progress.Chunks[0].TotalSize = total
+			d.progress.DownloadedSize = total
+			d.progress.TotalSize = total
+			d.progress.Chunks[0].Status = "downloading"
+			d.mu.Unlock()
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("read body: %w", readErr)
+		}
+	}
+	if total == 0 {
+		return fmt.Errorf("empty response body")
+	}
+	d.mu.Lock()
+	d.totalSize = total
+	d.progress.Chunks[0].Status = "completed"
+	d.mu.Unlock()
+	d.emitProgress(0, total, "completed")
 	return nil
 }
 
@@ -794,6 +884,7 @@ func GetFileInfo(rawURL, proxyURL string, allowLocal bool) (*FileInfo, error) {
 	info := &FileInfo{}
 
 	contentLength := resp.Header.Get("Content-Length")
+	sizeKnown := contentLength != ""
 	if contentLength != "" {
 		size, err := strconv.ParseInt(contentLength, 10, 64)
 		if err != nil {
@@ -806,14 +897,17 @@ func GetFileInfo(rawURL, proxyURL string, allowLocal bool) (*FileInfo, error) {
 	if mediaType == "text/html" && !strings.EqualFold(disposition, "attachment") {
 		return nil, fmt.Errorf("download URL returned an HTML page instead of a file")
 	}
-	if info.Size <= 0 {
-		return nil, fmt.Errorf("download response has no usable content length")
+	if sizeKnown && info.Size == 0 {
+		return nil, fmt.Errorf("empty response body")
+	}
+	if sizeKnown && info.Size < 0 {
+		return nil, fmt.Errorf("invalid content length")
 	}
 
 	acceptRanges := resp.Header.Get("Accept-Ranges")
 	contentRange := resp.Header.Get("Content-Range")
 
-	info.SupportsRange = acceptRanges == "bytes" || contentRange != ""
+	info.SupportsRange = info.Size > 0 && (acceptRanges == "bytes" || contentRange != "")
 	info.ETag = strings.TrimSpace(resp.Header.Get("ETag"))
 	info.LastModified = strings.TrimSpace(resp.Header.Get("Last-Modified"))
 	info.Filename, err = extractFilename(resp, rawURL)
@@ -1032,4 +1126,76 @@ func CalculateChunks(fileSize int64, numChunks int) []Chunk {
 	}
 
 	return chunks
+}
+
+// DiskSpaceAvailable checks if there's enough free space for a download.
+func DiskSpaceAvailable(dir string, size int64) error {
+	if dir == "" || size <= 0 {
+		return nil
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dir, &stat); err != nil {
+		return fmt.Errorf("failed to check disk space: %w", err)
+	}
+
+	availableBytes := uint64(stat.Bavail) * uint64(stat.Bsize)
+	availableMB := availableBytes / (1024 * 1024)
+	requiredMB := size / (1024 * 1024)
+
+	if availableMB < uint64(requiredMB) {
+		return fmt.Errorf("insufficient disk space: need %d MB, have %d MB", requiredMB, availableMB)
+	}
+
+	return nil
+}
+
+// ValidateURL checks URL syntax and proxy policy.
+func ValidateURL(rawURL string, allowLocal bool) error {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return fmt.Errorf("URL cannot be empty")
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("malformed URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("only http and https are supported")
+	}
+
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return fmt.Errorf("missing hostname")
+	}
+
+	blockedPatterns := []string{
+		"metadata.google.internal",
+		"169.254.169.254",
+		"windows update.microsoft.com",
+		"metrics.apple.com",
+		"www.msftconnecttest.com",
+		"www.msftncsi.com",
+		"storage.googleapis.com",
+		"raw.githubusercontent.com",
+		"cdn.jsdelivr.net",
+	}
+
+	for _, pattern := range blockedPatterns {
+		if strings.Contains(host, pattern) {
+			return fmt.Errorf("automatic downloads from %q are disabled by default", host)
+		}
+	}
+
+	if !allowLocal {
+		ip, err := netip.ParseAddr(host)
+		if err == nil {
+			if ip.IsUnspecified() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+				return fmt.Errorf("downloads from %s are not allowed; use 'allow_local_hosts: true' in config", host)
+			}
+		}
+	}
+
+	return nil
 }

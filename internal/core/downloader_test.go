@@ -399,7 +399,7 @@ func TestResumeRejectsChangedRepresentation(t *testing.T) {
 	}
 }
 
-func TestGetFileInfoRejectsHTMLOrUnknownSize(t *testing.T) {
+func TestGetFileInfoRejectsNonFileResponses(t *testing.T) {
 	tests := []struct {
 		name          string
 		contentType   string
@@ -407,7 +407,7 @@ func TestGetFileInfoRejectsHTMLOrUnknownSize(t *testing.T) {
 		wantError     string
 	}{
 		{name: "html page", contentType: "text/html; charset=UTF-8", contentLength: "128", wantError: "HTML page"},
-		{name: "unknown size", contentType: "application/octet-stream", wantError: "no usable content length"},
+		{name: "empty file", contentType: "application/octet-stream", contentLength: "0", wantError: "empty"},
 	}
 
 	for _, tt := range tests {
@@ -430,6 +430,33 @@ func TestGetFileInfoRejectsHTMLOrUnknownSize(t *testing.T) {
 	}
 }
 
+// A server that never advertises Content-Length is legitimate; the download
+// just has to fall back to a single sequential stream with no resume.
+func TestGetFileInfoAllowsUnknownSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	info, err := GetFileInfo(srv.URL+"/download.bin", "", true)
+	if err != nil {
+		t.Fatalf("GetFileInfo rejected a response without Content-Length: %v", err)
+	}
+	if info.Size != 0 {
+		t.Fatal("SizeKnown = true, want false when Content-Length is absent")
+	}
+	if info.Size != 0 {
+		t.Fatalf("Size = %d, want 0 when the length is unknown", info.Size)
+	}
+	// Ranges cannot be validated without a total, so they must be refused
+	// even though the server advertised support for them.
+	if info.SupportsRange {
+		t.Fatal("SupportsRange = true, want false when the total size is unknown")
+	}
+}
+
 func TestGetFileInfoAllowsHTMLAttachment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
@@ -445,6 +472,136 @@ func TestGetFileInfoAllowsHTMLAttachment(t *testing.T) {
 	}
 	if info.Filename != "page.html" || info.Size != 128 {
 		t.Fatalf("GetFileInfo = filename %q size %d, want page.html size 128", info.Filename, info.Size)
+	}
+}
+
+// Servers without Content-Length are streamed sequentially; the download must
+// still finish with every byte on disk and report its discovered size.
+func TestStreamsResponseWithoutContentLength(t *testing.T) {
+	payload := makePayload(150000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "" {
+			t.Errorf("unexpected Range header %q on an unknown-size download", r.Header.Get("Range"))
+		}
+		// Omitting Content-Length makes Go use chunked transfer encoding.
+		w.WriteHeader(http.StatusOK)
+		w.Write(payload) //nolint:errcheck
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "stream.bin")
+	// End -1 is the unknown-size marker produced by CalculateChunks(0, n).
+	d := NewDownloader(srv.URL+"/file.bin", dst, 0, []Chunk{{Index: 0, Start: 0, End: -1}}, 1, 1)
+	d.client = httptestClient()
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned %v, want nil", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded %d bytes, want %d identical bytes", len(got), len(payload))
+	}
+	if d.totalSize != int64(len(payload)) {
+		t.Fatalf("TotalSize = %d, want %d", d.totalSize, len(payload))
+	}
+}
+
+// An empty body is a failure rather than a zero-byte success, otherwise a
+// rejected or gated download would silently look complete.
+func TestStreamRejectsEmptyBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "empty.bin")
+	d := NewDownloader(srv.URL+"/file.bin", dst, 0, []Chunk{{Index: 0, Start: 0, End: -1}}, 1, 1)
+	d.client = httptestClient()
+
+	err := d.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start accepted an empty response body")
+	}
+	if !strings.Contains(err.Error(), "empty response body") {
+		t.Fatalf("Start error = %q, want it to mention an empty response body", err)
+	}
+}
+
+func TestUnknownSizeClosesDoneAndPersistsCompletion(t *testing.T) {
+	payload := makePayload(4096)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload)
+	}))
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "unknown-size.bin")
+	d := NewDownloader(srv.URL, dst, 0, []Chunk{{Index: 0, Start: 0, End: -1}}, 1, 0)
+	d.SetHTTPClient(httptestClient())
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned %v, want nil", err)
+	}
+	select {
+	case <-d.Done():
+	default:
+		t.Fatal("Done channel is not closed after unknown-size download")
+	}
+	d.mu.RLock()
+	status := d.progress.Chunks[0].Status
+	total := d.progress.TotalSize
+	d.mu.RUnlock()
+	if status != "completed" || total != int64(len(payload)) {
+		t.Fatalf("progress = status %q, total %d; want completed, %d", status, total, len(payload))
+	}
+}
+
+// Some hosts hand out a technical cookie on a redirect and require it on the
+// follow-up request. The jar is scoped to this download only; no browser
+// cookies are ever involved.
+func TestSessionCookiesFollowRedirects(t *testing.T) {
+	payload := makePayload(2048)
+	var served atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
+		http.SetCookie(w, &http.Cookie{Name: "file_code", Value: "abc123", Path: "/"})
+		http.Redirect(w, r, "/deliver", http.StatusFound)
+	})
+	mux.HandleFunc("/deliver", func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie("file_code")
+		if err != nil || c.Value != "abc123" {
+			http.Error(w, "missing session cookie", http.StatusForbidden)
+			return
+		}
+		served.Add(1)
+		w.Header().Set("Content-Length", strconv.Itoa(len(payload)))
+		w.WriteHeader(http.StatusOK)
+		w.Write(payload) //nolint:errcheck
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dst := filepath.Join(t.TempDir(), "cookie.bin")
+	d := NewDownloader(srv.URL+"/start", dst, int64(len(payload)), CalculateChunks(int64(len(payload)), 1), 1, 1)
+	// Keep the production client so its cookie jar is the thing under test,
+	// and only relax the address policy for the loopback test server.
+	d.SetAllowLocalHosts(true)
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start returned %v, want nil", err)
+	}
+	if served.Load() != 1 {
+		t.Fatalf("delivery handler served %d times, want 1", served.Load())
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded %d bytes, want %d identical bytes", len(got), len(payload))
 	}
 }
 

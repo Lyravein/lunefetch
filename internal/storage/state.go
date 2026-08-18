@@ -305,6 +305,36 @@ func (sm *StateManager) UpdateDownloadFilename(id int64, filename string) error 
 	return err
 }
 
+// UpdateTotalSize records the real byte count of a download whose size was not
+// advertised by the server. It also fixes up the single chunk's end offset so
+// the stored range matches the bytes actually written, and it is a no-op for
+// sizes that are not positive.
+func (sm *StateManager) UpdateTotalSize(id int64, size int64) error {
+	if size <= 0 {
+		return nil
+	}
+	tx, err := sm.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	if _, err := tx.Exec(
+		`UPDATE downloads SET total_size = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		size, id,
+	); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE chunks SET end_byte = ?, updated_at = CURRENT_TIMESTAMP
+		 WHERE download_id = ? AND end_byte < 0`,
+		size-1, id,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SetValidators records the ETag / Last-Modified pair returned by the server so
 // a later resume can prove with If-Range that the remote file is unchanged.
 // Empty strings are stored as NULL.

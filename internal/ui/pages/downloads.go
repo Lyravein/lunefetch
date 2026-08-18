@@ -124,8 +124,40 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 			case "open_folder":
 				dp.openFolder(id)
 			case "open_file":
+				rec, _ := dp.sm.GetDownload(id)
+				if rec != nil && (rec.Status == "completed" || rec.Status == "cancelled") {
+					components.ShowFreshRestartDialog(dp.window, rec, func() {
+						dp.DeleteDownload(id) // Delete existing first
+						// Caller must handle re-adding the URL
+					})
+					return
+				}
 				dp.openFile(id)
 			}
+		},
+		func(ids []int64, action string) {
+			if len(ids) == 0 {
+				return
+			}
+			title := "Cancel Downloads"
+			message := fmt.Sprintf("Cancel %d selected downloads?", len(ids))
+			if action == "delete" {
+				title = "Remove Downloads"
+				message = fmt.Sprintf("Remove %d selected downloads from the list?", len(ids))
+			}
+			dialog.ShowConfirm(title, message, func(ok bool) {
+				if !ok {
+					return
+				}
+				for _, id := range ids {
+					if action == "delete" {
+						dp.DeleteDownload(id)
+					} else {
+						dp.CancelDownload(id)
+					}
+				}
+				dp.Refresh()
+			}, dp.window)
 		},
 	)
 

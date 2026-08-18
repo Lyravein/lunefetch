@@ -39,6 +39,12 @@ func TestSpeedLimitDefaultsToUnlimited(t *testing.T) {
 	}
 }
 
+func TestCloseToTrayDefaultsEnabled(t *testing.T) {
+	if !Default().CloseToTray {
+		t.Fatal("CloseToTray = false, want true")
+	}
+}
+
 // TestMissingFieldsStayUnlimited memastikan config lama tanpa field speed limit
 // tetap terbaca sebagai unlimited, bukan error.
 func TestMissingFieldsStayUnlimited(t *testing.T) {
