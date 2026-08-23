@@ -2,12 +2,15 @@ package components
 
 import (
 	"fmt"
-	"image/color"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -16,44 +19,24 @@ import (
 	"github.com/lyravein/lunefetch/internal/ui/store"
 )
 
-// colHeaders defines the display name for each column.
-var colHeaders = []string{"#", "Name", "Size", "Progress", "Speed", "Status", "Added", ""}
+const (
+	downloadRowHeight float32 = 84
+	rowPadX           float32 = 12
+	rowPadY           float32 = 8
+	rowGap            float32 = 8
+	progressHeight    float32 = 8
+	// statusColWidth keeps the status/speed column a fixed width so every
+	// progress bar in the list starts and ends at the same x positions.
+	statusColWidth float32 = 150
+)
 
-// colWidths defines the initial width for each column.
-var colWidths = []float32{54, 350, 80, 160, 80, 80, 120, 10}
-
-// colMinWidths defines the minimum width used by responsive resizing.
-var colMinWidths = []float32{48, 60, 42, 60, 44, 66, 42, 10}
-
-// headerHeight is the height of the custom (always visible) header row.
-const headerHeight = 34
-
-// Fyne's table renderer adds theme padding between cells. The custom header
-// must use the same gap or its columns drift away from the table columns.
-const tableScrollbarWidth = 16
-
-// colToTableCol maps column index (0-based) to store.TableColumn.
-// Speed is runtime-only and the actions column carries no store data.
-var colToTableCol = []store.TableColumn{
-	store.ColAdded, // row numbers follow the default Added ordering
-	store.ColName,
-	store.ColSize,
-	store.ColProgress,
-	store.ColSpeed, // placeholder — runtime speed is not sortable
-	store.ColStatus,
-	store.ColAdded,
-	store.ColStatus, // placeholder — actions are not sortable
-}
-
-// isSortableCol reports whether clicking the header of column i toggles sort.
-// Speed is runtime-only and cannot be sorted through the store.
-func isSortableCol(i int) bool {
-	switch i {
-	case 0, 1, 2, 3, 5, 6:
-		return true
-	default:
-		return false
-	}
+var visibleSortColumns = []struct {
+	label string
+	col   store.TableColumn
+}{
+	{label: "Name", col: store.ColName},
+	{label: "Progress", col: store.ColProgress},
+	{label: "Status", col: store.ColStatus},
 }
 
 func statusText(status string) string {
@@ -79,22 +62,6 @@ func statusText(status string) string {
 	}
 }
 
-func statusColor(status string) color.Color {
-	switch status {
-	case "downloading":
-		return theme.Color(theme.ColorNamePrimary)
-	case "completed":
-		return theme.Color(theme.ColorNameSuccess)
-	case "failed", "cancelled":
-		return theme.Color(theme.ColorNameError)
-	case "paused", "scheduled":
-		return theme.Color(theme.ColorNameWarning)
-	default:
-		return theme.Color(theme.ColorNamePlaceHolder)
-	}
-}
-
-// humanDate formats a time.Time into a friendly string.
 func humanDate(t time.Time) string {
 	now := time.Now()
 	y, m, d := t.Date()
@@ -111,394 +78,459 @@ func humanDate(t time.Time) string {
 	}
 }
 
-// tapLabel is a bold label that calls onTap when clicked.
-type tapLabel struct {
-	widget.Label
-	onTap func()
+func formatDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+	d -= m * time.Minute
+	s := d / time.Second
+	if h > 0 {
+		return fmt.Sprintf("%dh%02dm", h, m)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm%02ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
 }
 
-func newTapLabel(onTap func()) *tapLabel {
-	l := &tapLabel{onTap: onTap}
-	l.TextStyle = fyne.TextStyle{Bold: true}
-	l.Truncation = fyne.TextTruncateEllipsis
-	l.ExtendBaseWidget(l)
-	return l
+// rowMetaText is the secondary line under a filename: transferred size, total
+// size, and completion percentage.
+func rowMetaText(rec *storage.DownloadRecord) string {
+	if rec == nil {
+		return ""
+	}
+	if rec.TotalSize <= 0 {
+		return FormatSize(rec.DownloadedSize)
+	}
+	return fmt.Sprintf("%s  •  %s  •  %.0f%%", FormatSize(rec.DownloadedSize), FormatSize(rec.TotalSize), progressOf(rec)*100)
 }
 
-// Tapped implements fyne.Tappable.
-func (l *tapLabel) Tapped(*fyne.PointEvent) {
-	if l.onTap != nil {
-		l.onTap()
+func progressOf(rec *storage.DownloadRecord) float64 {
+	if rec == nil || rec.TotalSize <= 0 {
+		return 0
+	}
+	pct := float64(rec.DownloadedSize) / float64(rec.TotalSize)
+	if pct < 0 {
+		return 0
+	}
+	if pct > 1 {
+		return 1
+	}
+	return pct
+}
+
+type downloadRow struct {
+	widget.BaseWidget
+	check    *widget.Check
+	icon     *widget.Icon
+	name     *widget.Label
+	meta     *widget.Label
+	progress *compactProgress
+	status   *widget.Label
+	speed    *widget.Label
+	eta      *widget.Label
+	actions  *widget.Button
+}
+
+func newDownloadRow() *downloadRow {
+	r := &downloadRow{
+		check:    widget.NewCheck("", nil),
+		icon:     widget.NewIcon(theme.FileIcon()),
+		name:     widget.NewLabel(""),
+		meta:     widget.NewLabel(""),
+		progress: newCompactProgress(),
+		status:   widget.NewLabel(""),
+		speed:    widget.NewLabel(""),
+		eta:      widget.NewLabel(""),
+		actions:  widget.NewButtonWithIcon("Actions", theme.MoreVerticalIcon(), nil),
+	}
+	r.name.TextStyle = fyne.TextStyle{Bold: true}
+	r.name.Truncation = fyne.TextTruncateEllipsis
+	r.meta.Importance = widget.LowImportance
+	r.status.Importance = widget.MediumImportance
+	r.speed.Importance = widget.LowImportance
+	r.eta.Importance = widget.LowImportance
+	r.actions.Importance = widget.LowImportance
+	r.ExtendBaseWidget(r)
+	return r
+}
+
+type compactProgress struct {
+	widget.BaseWidget
+	Value float64
+}
+
+func newCompactProgress() *compactProgress {
+	p := &compactProgress{}
+	p.ExtendBaseWidget(p)
+	return p
+}
+
+func (p *compactProgress) SetValue(value float64) {
+	if value < 0 {
+		value = 0
+	} else if value > 1 {
+		value = 1
+	}
+	p.Value = value
+	p.Refresh()
+}
+
+// CreateRenderer draws a thin track/fill pair. The percentage is shown in the
+// row's metadata line instead of inside the bar: text does not fit in a bar this
+// thin and previously spilled outside the row.
+func (p *compactProgress) CreateRenderer() fyne.WidgetRenderer {
+	track := canvas.NewRectangle(theme.Color(theme.ColorNameSeparator))
+	fill := canvas.NewRectangle(theme.Color(theme.ColorNamePrimary))
+	track.CornerRadius = progressHeight / 2
+	fill.CornerRadius = progressHeight / 2
+	return &compactProgressRenderer{progress: p, track: track, fill: fill, objects: []fyne.CanvasObject{track, fill}}
+}
+
+type compactProgressRenderer struct {
+	progress *compactProgress
+	track    *canvas.Rectangle
+	fill     *canvas.Rectangle
+	objects  []fyne.CanvasObject
+}
+
+func (r *compactProgressRenderer) Layout(size fyne.Size) {
+	r.track.Resize(size)
+	r.track.Move(fyne.NewPos(0, 0))
+	r.fill.Resize(fyne.NewSize(size.Width*float32(r.progress.Value), size.Height))
+	r.fill.Move(fyne.NewPos(0, 0))
+}
+
+func (r *compactProgressRenderer) MinSize() fyne.Size {
+	return fyne.NewSize(80, progressHeight)
+}
+
+func (r *compactProgressRenderer) Refresh() {
+	r.track.FillColor = theme.Color(theme.ColorNameSeparator)
+	r.fill.FillColor = theme.Color(theme.ColorNamePrimary)
+	r.track.Refresh()
+	r.fill.Refresh()
+	r.Layout(r.progress.Size())
+}
+
+func (r *compactProgressRenderer) Objects() []fyne.CanvasObject { return r.objects }
+
+func (r *compactProgressRenderer) Destroy() {}
+
+// CreateRenderer uses a documented custom layout instead of nested containers.
+// Fyne's box/border layouts stack minimum sizes, which previously pushed the
+// progress bar past the bottom edge of the row; explicit geometry keeps every
+// child inside the fixed row height on both Linux and Windows.
+func (r *downloadRow) CreateRenderer() fyne.WidgetRenderer {
+	background := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
+	return &downloadRowRenderer{
+		row:        r,
+		background: background,
+		objects: []fyne.CanvasObject{
+			background, r.check, r.icon, r.name, r.meta, r.progress,
+			r.status, r.speed, r.eta, r.actions,
+		},
 	}
 }
 
-// headerLayout positions header cells according to the current column widths.
-type headerLayout struct {
-	dt *DownloadTable
+type downloadRowRenderer struct {
+	row        *downloadRow
+	background *canvas.Rectangle
+	objects    []fyne.CanvasObject
 }
 
-// Layout implements fyne.Layout.
-func (l *headerLayout) Layout(objects []fyne.CanvasObject, _ fyne.Size) {
-	n := len(colHeaders)
-	x := float32(0)
-	gap := theme.Size(theme.SizeNamePadding)
-	for i := 0; i < n; i++ {
-		w := l.dt.widths[i]
-		objects[i].Move(fyne.NewPos(x, 0))
-		objects[i].Resize(fyne.NewSize(w, headerHeight))
-		x += w
-		if i < n-1 {
-			x += gap
-		}
+func (r *downloadRowRenderer) Layout(size fyne.Size) {
+	r.background.Resize(size)
+	r.background.Move(fyne.NewPos(0, 0))
+
+	left := rowPadX
+	if !r.row.check.Hidden {
+		checkSize := r.row.check.MinSize()
+		r.row.check.Resize(checkSize)
+		r.row.check.Move(fyne.NewPos(left, (size.Height-checkSize.Height)/2))
+		left += checkSize.Width + rowGap
+	} else {
+		r.row.check.Resize(fyne.NewSize(0, 0))
 	}
+
+	iconSize := fyne.NewSize(theme.Size(theme.SizeNameInlineIcon), theme.Size(theme.SizeNameInlineIcon))
+	r.row.icon.Resize(iconSize)
+	r.row.icon.Move(fyne.NewPos(left, (size.Height-iconSize.Height)/2))
+	left += iconSize.Width + rowGap
+
+	actionsSize := r.row.actions.MinSize()
+	actionsX := size.Width - rowPadX - actionsSize.Width
+	r.row.actions.Resize(actionsSize)
+	r.row.actions.Move(fyne.NewPos(actionsX, (size.Height-actionsSize.Height)/2))
+
+	statusSize := fyne.NewSize(r.row.status.MinSize().Width, lineHeight(fyne.TextStyle{Bold: true}))
+	speedSize := fyne.NewSize(r.row.speed.MinSize().Width, lineHeight(fyne.TextStyle{}))
+	etaSize := fyne.NewSize(r.row.eta.MinSize().Width, lineHeight(fyne.TextStyle{}))
+	metaRowWidth := speedSize.Width + etaSize.Width
+	rightWidth := statusColWidth
+	if statusSize.Width > rightWidth {
+		rightWidth = statusSize.Width
+	}
+	if metaRowWidth > rightWidth {
+		rightWidth = metaRowWidth
+	}
+	rightX := actionsX - rowGap - rightWidth
+	if rightX < left {
+		rightX = left
+	}
+	stackHeight := statusSize.Height + speedSize.Height
+	top := (size.Height - stackHeight) / 2
+	r.row.status.Resize(fyne.NewSize(rightWidth, statusSize.Height))
+	r.row.status.Move(fyne.NewPos(rightX, top))
+	r.row.speed.Resize(speedSize)
+	r.row.speed.Move(fyne.NewPos(rightX, top+statusSize.Height))
+	r.row.eta.Resize(etaSize)
+	r.row.eta.Move(fyne.NewPos(rightX+speedSize.Width, top+statusSize.Height))
+
+	infoWidth := rightX - rowGap - left
+	if infoWidth < 0 {
+		infoWidth = 0
+	}
+	nameHeight := lineHeight(fyne.TextStyle{Bold: true})
+	metaHeight := lineHeight(fyne.TextStyle{})
+	r.row.name.Resize(fyne.NewSize(infoWidth, nameHeight))
+	r.row.name.Move(fyne.NewPos(left, rowPadY))
+	r.row.meta.Resize(fyne.NewSize(infoWidth, metaHeight))
+	r.row.meta.Move(fyne.NewPos(left, rowPadY+nameHeight))
+	r.row.progress.Resize(fyne.NewSize(infoWidth, progressHeight))
+	r.row.progress.Move(fyne.NewPos(left, size.Height-rowPadY-progressHeight))
 }
 
-// MinSize implements fyne.Layout.
-//
-// IMPORTANT: this must NOT report the summed column widths. The header sits
-// in a Border's top slot, and a width-hungry MinSize propagates up to the
-// window, forcing it to grow — which feeds back into SetAvailableWidth and
-// grows the columns again in an endless loop. Report a minimal width and
-// let the Border stretch us instead.
-func (l *headerLayout) MinSize(_ []fyne.CanvasObject) fyne.Size {
-	return fyne.NewSize(1, headerHeight)
+func (r *downloadRowRenderer) MinSize() fyne.Size {
+	width := rowPadX*2 + rowGap*2 + theme.Size(theme.SizeNameInlineIcon)
+	width += r.row.status.MinSize().Width + r.row.actions.MinSize().Width
+	return fyne.NewSize(width, downloadRowHeight)
 }
 
-// DownloadTable wraps widget.Table with a custom sortable header row.
+// lineHeight is the height of a single line of text for the given style. Label
+// minimum sizes add widget padding, which stacked past the fixed row height.
+func lineHeight(style fyne.TextStyle) float32 {
+	return fyne.MeasureText("Ag", theme.TextSize(), style).Height
+}
+
+func (r *downloadRowRenderer) Refresh() {
+	r.background.FillColor = theme.Color(theme.ColorNameInputBackground)
+	r.background.Refresh()
+	r.Layout(r.row.Size())
+}
+
+func (r *downloadRowRenderer) Objects() []fyne.CanvasObject { return r.objects }
+
+func (r *downloadRowRenderer) Destroy() {}
+
 type DownloadTable struct {
-	table  *widget.Table
-	header *fyne.Container
-	root   *fyne.Container
-
-	records  []*storage.DownloadRecord
-	speeds   map[int64]float64 // id → bytes/sec
-	selected int               // selected row index, -1 = none
-	window   fyne.Window       // for popup menus + clipboard
-
-	widths    []float32
-	lastWidth float32
-
-	sortCol store.TableColumn
-	sortAsc bool
-
-	headerLabels []*tapLabel
-
-	onSort       func(col store.TableColumn, asc bool)
-	onSelect     func(id int64)
-	onAction     func(id int64, action string)
-	onBulkAction func(ids []int64, action string)
-
+	list         *widget.List
+	header       fyne.CanvasObject
+	root         *fyne.Container
+	records      []*storage.DownloadRecord
+	speeds       map[int64]float64
+	window       fyne.Window
+	sortCol      store.TableColumn
+	sortAsc      bool
+	onSort       func(store.TableColumn, bool)
+	onSelect     func(int64)
+	onAction     func(int64, string)
+	onBulkAction func([]int64, string)
+	onSpeedLimit func(int64, int64)
 	multiHandler *multiSelectHandler
+	selectButton *widget.Button
 }
 
-// NewDownloadTable creates a new DownloadTable.
-func NewDownloadTable(
-	onSort func(col store.TableColumn, asc bool),
-	onSelect func(id int64),
-	onAction func(id int64, action string),
-	onBulkAction func(ids []int64, action string),
-) *DownloadTable {
+func NewDownloadTable(onSort func(store.TableColumn, bool), onSelect func(int64), onAction func(int64, string), onBulkAction func([]int64, string)) *DownloadTable {
 	dt := &DownloadTable{
-		speeds:       make(map[int64]float64),
-		selected:     -1,
-		sortCol:      store.ColAdded,
-		sortAsc:      true,
-		onSort:       onSort,
-		onSelect:     onSelect,
-		onAction:     onAction,
-		onBulkAction: onBulkAction,
-		widths:       append([]float32(nil), colWidths...),
+		speeds: make(map[int64]float64), sortCol: store.ColAdded, sortAsc: true,
+		onSort: onSort, onSelect: onSelect, onAction: onAction, onBulkAction: onBulkAction,
 	}
 	dt.multiHandler = newMultiSelectHandler(dt)
-
-	dt.table = widget.NewTable(
-		func() (int, int) { return len(dt.records), len(colHeaders) },
-
-		// Template cell: progress bar, labels and action button stacked; visibility
-		// is controlled per cell in the update func.
-		func() fyne.CanvasObject {
-			background := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
-			progress := canvas.NewRectangle(theme.Color(theme.ColorNamePrimary))
-			check := widget.NewCheck("", nil)
-			lbl := widget.NewLabel("")
-			lbl.Truncation = fyne.TextTruncateEllipsis
-			status := canvas.NewText("", theme.Color(theme.ColorNameForeground))
-			status.Alignment = fyne.TextAlignLeading
-			status.TextSize = theme.Size(theme.SizeNameText)
-			btn := widget.NewButtonWithIcon("Actions", theme.MoreVerticalIcon(), nil)
-			btn.Importance = widget.LowImportance
-			return container.NewStack(background, progress, check, lbl, status, btn)
-		},
-
-		func(id widget.TableCellID, o fyne.CanvasObject) {
-			c := o.(*fyne.Container)
-			background := c.Objects[0].(*canvas.Rectangle)
-			progress := c.Objects[1].(*canvas.Rectangle)
-			check := c.Objects[2].(*widget.Check)
-			lbl := c.Objects[3].(*widget.Label)
-			status := c.Objects[4].(*canvas.Text)
-			btn := c.Objects[5].(*widget.Button)
-
-			row := id.Row
-			if row >= len(dt.records) {
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				status.Hide()
-				btn.Hide()
-				lbl.SetText("")
-				return
-			}
-			rec := dt.records[row]
-			lbl.TextStyle = fyne.TextStyle{}
-			lbl.Alignment = fyne.TextAlignLeading
-			status.Hide()
-
-			// Action column — show only the ⋮ button.
-			if id.Col == len(colHeaders)-1 {
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Hide()
-				btn.Show()
-				btn.OnTapped = func() { dt.showRowMenu(rec, btn) }
-				return
-			}
-			btn.Hide()
-
-			switch id.Col {
-			case 0: // Row number
-				background.Hide()
-				progress.Hide()
-				check.Show()
-				check.SetChecked(dt.multiHandler.isSelected(rec.ID))
-				check.OnChanged = func(checked bool) {
-					if checked != dt.multiHandler.isSelected(rec.ID) {
-						dt.multiHandler.toggle(rec.ID)
-					}
-				}
-				lbl.Show()
-				lbl.Alignment = fyne.TextAlignTrailing
-				lbl.SetText(fmt.Sprintf("%d", row+1))
-
-			case 1: // Name
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Show()
-				lbl.SetText(rec.Filename)
-
-			case 2: // Size
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Show()
-				lbl.Alignment = fyne.TextAlignTrailing
-				lbl.SetText(FormatSize(rec.TotalSize))
-
-			case 3: // Progress
-				check.Hide()
-				if rec.TotalSize > 0 {
-					pct := float64(rec.DownloadedSize) / float64(rec.TotalSize)
-					if pct < 0 {
-						pct = 0
-					} else if pct > 1 {
-						pct = 1
-					}
-					background.Show()
-					progress.Show()
-					background.Resize(c.Size())
-					progress.Resize(fyne.NewSize(c.Size().Width*float32(pct), c.Size().Height))
-					progress.FillColor = hexToColor(progressBarColorHex(pct))
-					background.Refresh()
-					progress.Refresh()
-					lbl.Hide()
-				} else {
-					background.Hide()
-					progress.Hide()
-					lbl.Show()
-					lbl.SetText("—")
-				}
-
-			case 4: // Speed
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Show()
-				lbl.Alignment = fyne.TextAlignTrailing
-				if spd, ok := dt.speeds[rec.ID]; ok && spd > 0 {
-					lbl.SetText(FormatSize(int64(spd)) + "/s")
-				} else {
-					lbl.SetText("—")
-				}
-
-			case 5: // Status
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Hide()
-				status.Text = statusText(rec.Status)
-				status.Color = statusColor(rec.Status)
-				status.Show()
-				status.Refresh()
-
-			case 6: // Added
-				background.Hide()
-				progress.Hide()
-				check.Hide()
-				lbl.Show()
-				lbl.Alignment = fyne.TextAlignTrailing
-				lbl.SetText(humanDate(rec.CreatedAt))
-			}
-		},
+	dt.list = widget.NewList(
+		func() int { return len(dt.records) },
+		func() fyne.CanvasObject { return newDownloadRow() },
+		func(id widget.ListItemID, obj fyne.CanvasObject) { dt.updateRow(id, obj.(*downloadRow)) },
 	)
-
-	dt.table.OnSelected = func(id widget.TableCellID) {
-		if id.Row < len(dt.records) {
-			dt.selected = id.Row
-			if dt.onSelect != nil {
-				dt.onSelect(dt.records[id.Row].ID)
-			}
+	dt.list.SetItemHeight(0, downloadRowHeight)
+	dt.list.OnSelected = func(id widget.ListItemID) {
+		if id < len(dt.records) && dt.onSelect != nil {
+			dt.onSelect(dt.records[id].ID)
 		}
 	}
-	dt.table.OnUnselected = func(widget.TableCellID) {
-		dt.selected = -1
-	}
-
-	for i, w := range dt.widths {
-		dt.table.SetColumnWidth(i, w)
-	}
-
 	dt.buildHeader()
-
-	dt.root = container.NewBorder(dt.header, nil, nil, nil, dt.table)
+	dt.root = container.NewBorder(dt.header, nil, nil, nil, dt.list)
 	return dt
 }
 
-// buildHeader constructs the custom header row with clickable sort labels.
-func (dt *DownloadTable) buildHeader() {
-	n := len(colHeaders)
-	objects := make([]fyne.CanvasObject, 0, n)
-	dt.headerLabels = make([]*tapLabel, n)
-
-	for i := 0; i < n; i++ {
-		col := i
-		var lbl *tapLabel
-		if isSortableCol(col) {
-			lbl = newTapLabel(func() { dt.toggleSort(col) })
-		} else {
-			lbl = newTapLabel(nil)
-			lbl.TextStyle = fyne.TextStyle{}
-		}
-		dt.headerLabels[col] = lbl
-		if col == 0 || col == 2 || col == 3 || col == 4 || col == 6 {
-			lbl.Alignment = fyne.TextAlignTrailing
-		}
-		objects = append(objects, container.New(layout.NewCustomPaddedLayout(0, 3, 4, 4), lbl))
+func (dt *DownloadTable) updateRow(id widget.ListItemID, row *downloadRow) {
+	if id >= len(dt.records) {
+		return
 	}
-
-	headerContent := container.New(&headerLayout{dt: dt}, objects...)
-	headerBackground := canvas.NewRectangle(theme.Color(theme.ColorNameHeaderBackground))
-	dt.header = container.NewStack(headerBackground, headerContent)
-	dt.refreshHeaderLabels()
+	rec := dt.records[id]
+	if dt.multiHandler.mode {
+		row.check.Show()
+	} else {
+		row.check.Hide()
+	}
+	row.icon.SetResource(fileIcon(rec.Filename))
+	row.name.SetText(rec.Filename)
+	row.meta.SetText(rowMetaText(rec))
+	row.progress.SetValue(progressOf(rec))
+	row.status.SetText(statusText(rec.Status))
+	row.status.TextStyle = fyne.TextStyle{Bold: true}
+	row.status.Importance = widget.MediumImportance
+	row.speed.SetText("")
+	row.eta.SetText("")
+	if speed := dt.speeds[rec.ID]; speed > 0 {
+		row.speed.SetText(FormatSize(int64(speed)) + "/s")
+		remaining := rec.TotalSize - rec.DownloadedSize
+		if remaining > 0 {
+			row.eta.SetText("ETA " + formatDuration(time.Duration(float64(remaining)/speed)*time.Second))
+		}
+	}
+	row.check.OnChanged = nil
+	row.check.SetChecked(dt.multiHandler.isSelected(rec.ID))
+	row.check.OnChanged = func(checked bool) {
+		if checked != dt.multiHandler.isSelected(rec.ID) {
+			dt.multiHandler.toggle(rec.ID)
+		}
+	}
+	row.actions.OnTapped = func() { dt.showRowMenu(rec, row.actions) }
+	row.status.Refresh()
+	row.Refresh()
 }
 
-// toggleSort flips or switches the sort column and notifies the listener.
-func (dt *DownloadTable) toggleSort(col int) {
-	tc := colToTableCol[col]
-	if tc == dt.sortCol {
+func (dt *DownloadTable) buildHeader() {
+	buttons := make([]fyne.CanvasObject, 0, len(visibleSortColumns)+1)
+	for _, item := range visibleSortColumns {
+		item := item
+		btn := widget.NewButton(item.label, func() { dt.toggleSort(item.col) })
+		btn.Importance = widget.LowImportance
+		buttons = append(buttons, btn)
+	}
+	sortMenu := widget.NewButtonWithIcon("Sort", theme.MenuIcon(), nil)
+	sortMenu.Importance = widget.LowImportance
+	sortMenu.OnTapped = func() { dt.showSortMenu(sortMenu) }
+	buttons = append(buttons, sortMenu)
+	dt.selectButton = widget.NewButton("Select", func() {
+		dt.multiHandler.toggleMode()
+		if dt.multiHandler.mode {
+			dt.selectButton.SetText("Done")
+		} else {
+			dt.selectButton.SetText("Select")
+		}
+		dt.list.Refresh()
+	})
+	dt.selectButton.Importance = widget.LowImportance
+	dt.header = container.NewBorder(nil, widget.NewSeparator(), nil, container.NewHBox(dt.selectButton, sortMenu), container.New(layout.NewCustomPaddedLayout(4, 4, 10, 10), container.NewHBox(buttons[:len(buttons)-1]...)))
+}
+
+func fileIcon(filename string) fyne.Resource {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".mp3", ".flac", ".aac", ".ogg", ".wav", ".m4a", ".opus":
+		return theme.FileAudioIcon()
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".ico":
+		return theme.FileImageIcon()
+	case ".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v":
+		return theme.FileVideoIcon()
+	case ".exe", ".msi", ".appimage", ".apk":
+		return theme.FileApplicationIcon()
+	case ".txt", ".md", ".pdf", ".doc", ".docx", ".odt":
+		return theme.FileTextIcon()
+	default:
+		return theme.FileIcon()
+	}
+}
+
+func (dt *DownloadTable) toggleSort(col store.TableColumn) {
+	if col == dt.sortCol {
 		dt.sortAsc = !dt.sortAsc
 	} else {
-		dt.sortCol = tc
-		dt.sortAsc = true
+		dt.sortCol, dt.sortAsc = col, true
 	}
-	dt.refreshHeaderLabels()
 	if dt.onSort != nil {
 		dt.onSort(dt.sortCol, dt.sortAsc)
 	}
 }
 
-// refreshHeaderLabels redraws header text with sort direction arrows.
-func (dt *DownloadTable) refreshHeaderLabels() {
-	for i, lbl := range dt.headerLabels {
-		text := colHeaders[i]
-		if isSortableCol(i) && colToTableCol[i] == dt.sortCol {
-			if dt.sortAsc {
-				text += " ▲"
-			} else {
-				text += " ▼"
-			}
-		}
-		lbl.SetText(text)
+func (dt *DownloadTable) showSortMenu(anchor fyne.CanvasObject) {
+	if dt.window == nil {
+		return
 	}
+	items := []*fyne.MenuItem{}
+	for _, item := range []struct {
+		label string
+		col   store.TableColumn
+	}{{"Size", store.ColSize}, {"Date Added", store.ColAdded}} {
+		item := item
+		items = append(items, fyne.NewMenuItem(item.label+" ascending", func() { dt.applySort(item.col, true) }), fyne.NewMenuItem(item.label+" descending", func() { dt.applySort(item.col, false) }))
+	}
+	canvas := fyne.CurrentApp().Driver().CanvasForObject(anchor)
+	if canvas == nil {
+		return
+	}
+	pop := widget.NewPopUpMenu(fyne.NewMenu("Sort", items...), canvas)
+	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
+	pop.ShowAtPosition(fyne.NewPos(pos.X-anchor.Size().Width, pos.Y+anchor.Size().Height))
 }
 
-// applyWidths pushes the width slice to both the table and the header.
-func (dt *DownloadTable) applyWidths() {
-	for i, w := range dt.widths {
-		dt.table.SetColumnWidth(i, w)
-	}
-	dt.header.Refresh()
-}
-
-// SetWindow injects the parent window (needed for popup menus + clipboard).
 func (dt *DownloadTable) SetWindow(w fyne.Window) { dt.window = w }
 
-// SetRecords updates the table data and redraws.
+func (dt *DownloadTable) SetSpeedLimitHandler(fn func(int64, int64)) { dt.onSpeedLimit = fn }
+
+func (dt *DownloadTable) applySort(col store.TableColumn, asc bool) {
+	dt.sortCol, dt.sortAsc = col, asc
+	if dt.onSort != nil {
+		dt.onSort(col, asc)
+	}
+}
+
 func (dt *DownloadTable) SetRecords(records []*storage.DownloadRecord) {
 	fyne.Do(func() {
 		dt.records = records
 		valid := make(map[int64]bool, len(records))
-		for row := range records {
-			valid[records[row].ID] = true
-			dt.table.SetRowHeight(row, 38)
+		for i, rec := range records {
+			valid[rec.ID] = true
+			dt.list.SetItemHeight(widget.ListItemID(i), downloadRowHeight)
 		}
 		for id := range dt.multiHandler.selected {
 			if !valid[id] {
 				delete(dt.multiHandler.selected, id)
 			}
 		}
-		dt.table.Refresh()
+		dt.list.Length = func() int { return len(dt.records) }
+		dt.list.Refresh()
 	})
 }
 
-// SetSpeeds updates the speed map and redraws.
 func (dt *DownloadTable) SetSpeeds(speeds map[int64]float64) {
-	fyne.Do(func() {
-		dt.speeds = speeds
-		dt.table.Refresh()
-	})
+	fyne.Do(func() { dt.speeds = speeds; dt.list.Refresh() })
 }
 
-// SetAvailableWidth scales the configured column widths to fill the table.
-// colWidths therefore remains the visible proportion source instead of only
-// acting as an initial value that gets overwritten by the Name column.
-func (dt *DownloadTable) SetAvailableWidth(width float32) {
-	if width < 1 || width == dt.lastWidth {
-		return
-	}
-	dt.lastWidth = width
-
-	dt.widths = proportionalWidths(width, colWidths, colMinWidths)
-	fyne.Do(dt.applyWidths)
-}
-
-// ContentWidth returns the width needed by the table columns without causing
-// widget.Table to create a horizontal scrollbar. Fyne adds one padding gap
-// between each pair of columns and reserves space for its vertical scrollbar.
-func ContentWidth(width float32) float32 {
-	columnGaps := float32(len(colHeaders)-1) * theme.Size(theme.SizeNamePadding)
-	return width - tableScrollbarWidth - columnGaps
-}
-
-// Widget returns the root canvas object (header + table).
 func (dt *DownloadTable) Widget() fyne.CanvasObject { return dt.root }
 
-// showRowMenu pops up a context menu for the given record, anchored to btn.
 func (dt *DownloadTable) showRowMenu(rec *storage.DownloadRecord, btn *widget.Button) {
 	if dt.window == nil {
 		return
 	}
+	items := dt.rowMenuItems(rec)
+	canvas := fyne.CurrentApp().Driver().CanvasForObject(btn)
+	if canvas == nil {
+		return
+	}
+	pop := widget.NewPopUpMenu(fyne.NewMenu("", items...), canvas)
+	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(btn)
+	pop.ShowAtPosition(fyne.NewPos(pos.X-btn.Size().Width*2, pos.Y+btn.Size().Height))
+}
+
+// rowMenuItems builds the action menu for one row. Split out from showRowMenu so
+// the menu contents can be asserted without a driver or canvas.
+func (dt *DownloadTable) rowMenuItems(rec *storage.DownloadRecord) []*fyne.MenuItem {
 	fire := func(action string) func() {
 		return func() {
 			if dt.onAction != nil {
@@ -506,8 +538,7 @@ func (dt *DownloadTable) showRowMenu(rec *storage.DownloadRecord, btn *widget.Bu
 			}
 		}
 	}
-
-	items := make([]*fyne.MenuItem, 0, 8)
+	items := []*fyne.MenuItem{}
 	selectedIDs := dt.multiHandler.getSelectedIDs()
 	if len(selectedIDs) > 1 {
 		fireSelected := func(action string) func() {
@@ -518,101 +549,74 @@ func (dt *DownloadTable) showRowMenu(rec *storage.DownloadRecord, btn *widget.Bu
 					}
 				}
 				dt.multiHandler.clearSelection()
-				dt.table.Refresh()
+				dt.list.Refresh()
 			}
 		}
 		items = append(items,
 			fyne.NewMenuItem("Pause selected", fireSelected("pause")),
 			fyne.NewMenuItem("Resume selected", fireSelected("resume")),
 			fyne.NewMenuItem("Cancel selected", func() {
-				dt.multiHandler.clearSelection()
-				dt.table.Refresh()
 				if dt.onBulkAction != nil {
 					dt.onBulkAction(selectedIDs, "cancel")
 				}
+				dt.multiHandler.clearSelection()
+				dt.list.Refresh()
 			}),
 			fyne.NewMenuItem("Remove selected", func() {
-				dt.multiHandler.clearSelection()
-				dt.table.Refresh()
 				if dt.onBulkAction != nil {
 					dt.onBulkAction(selectedIDs, "delete")
 				}
+				dt.multiHandler.clearSelection()
+				dt.list.Refresh()
 			}),
 			fyne.NewMenuItemSeparator(),
 		)
 	}
 	switch rec.Status {
 	case "downloading":
-		items = append(items,
-			fyne.NewMenuItem("Pause", fire("pause")),
-			fyne.NewMenuItem("Cancel", fire("cancel")),
-		)
-	case "paused", "failed", "cancelled", "queued", "scheduled", "pending":
-		items = append(items,
-			fyne.NewMenuItem("Resume", fire("resume")),
-			fyne.NewMenuItem("Cancel", fire("cancel")),
-		)
+		items = append(items, fyne.NewMenuItem("Pause", fire("pause")), fyne.NewMenuItem("Cancel", fire("cancel")))
 	case "completed":
+		items = append(items, fyne.NewMenuItem("Open File", fire("open_file")))
+	default:
+		items = append(items, fyne.NewMenuItem("Resume", fire("resume")), fyne.NewMenuItem("Cancel", fire("cancel")))
+	}
+	// Reordering only means something while a download is still waiting its turn.
+	if rec.Status == "queued" {
 		items = append(items,
-			fyne.NewMenuItem("Open File", fire("open_file")),
+			fyne.NewMenuItemSeparator(),
+			fyne.NewMenuItem("Move Up in Queue", fire("queue_up")),
+			fyne.NewMenuItem("Move Down in Queue", fire("queue_down")),
 		)
 	}
 	items = append(items,
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Copy URL", func() {
-			dt.window.Clipboard().SetContent(rec.URL)
-		}),
+		fyne.NewMenuItem("Copy URL", func() { dt.window.Clipboard().SetContent(rec.URL) }),
 		fyne.NewMenuItem("Open Folder", fire("open_folder")),
+		fyne.NewMenuItem("Set Speed Limit…", func() { dt.showSpeedLimitDialog(rec) }),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Remove from List", fire("delete")),
 	)
+	return items
+}
 
-	menu := fyne.NewMenu("", items...)
-	canvas := fyne.CurrentApp().Driver().CanvasForObject(btn)
-	if canvas == nil {
+func (dt *DownloadTable) showSpeedLimitDialog(rec *storage.DownloadRecord) {
+	if dt.window == nil || dt.onSpeedLimit == nil {
 		return
 	}
-	pop := widget.NewPopUpMenu(menu, canvas)
-	// Position the menu at the button's bottom-left corner.
-	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(btn)
-	pop.ShowAtPosition(fyne.NewPos(pos.X-btn.Size().Width*2, pos.Y+btn.Size().Height))
-}
-
-// sumWidths returns the total of a width slice.
-func sumWidths(ws []float32) float32 {
-	total := float32(0)
-	for _, w := range ws {
-		total += w
+	entry := widget.NewEntry()
+	entry.SetPlaceHolder("0 (unlimited)")
+	if rec.SpeedLimit > 0 {
+		entry.SetText(strconv.FormatInt(rec.SpeedLimit/1024, 10))
 	}
-	return total
-}
-
-// proportionalWidths treats configured widths as relative weights while
-// preserving each column's minimum size.
-func proportionalWidths(available float32, configured, minimums []float32) []float32 {
-	widths := append([]float32(nil), minimums...)
-	minimumTotal := sumWidths(minimums)
-	if available <= minimumTotal {
-		return widths
-	}
-
-	extra := available - minimumTotal
-	weightTotal := float32(0)
-	for i, configuredWidth := range configured {
-		weight := configuredWidth - minimums[i]
-		if weight > 0 {
-			weightTotal += weight
+	dialog.ShowForm("Set Speed Limit", "Apply", "Cancel", []*widget.FormItem{widget.NewFormItem("KB/s", entry)}, func(ok bool) {
+		if !ok {
+			return
 		}
-	}
-	if weightTotal == 0 {
-		return widths
-	}
-
-	for i, configuredWidth := range configured {
-		weight := configuredWidth - minimums[i]
-		if weight > 0 {
-			widths[i] += extra * weight / weightTotal
+		kb, err := strconv.ParseInt(entry.Text, 10, 64)
+		if err != nil || kb < 0 {
+			ShowError(dt.window, "Enter a non-negative speed limit in KB/s.")
+			return
 		}
-	}
-	return widths
+		dt.onSpeedLimit(rec.ID, kb*1024)
+	}, dt.window)
 }

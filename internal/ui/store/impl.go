@@ -113,6 +113,9 @@ func (s *DownloadStore) SetFilter(status DownloadStatus) {
 
 // SetCategory filters downloads by their assigned file category.
 func (s *DownloadStore) SetCategory(category string) {
+	if category == "All" {
+		category = ""
+	}
 	s.mu.Lock()
 	s.category = category
 	s.filter = StatusAll

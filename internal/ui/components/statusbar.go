@@ -6,36 +6,52 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/lyravein/lunefetch/internal/config"
+	"github.com/lyravein/lunefetch/internal/queue"
 )
 
-// StatusBar is a thin bar at the bottom of the window showing global stats.
 type StatusBar struct {
-	bar   fyne.CanvasObject
-	label *widget.Label
+	bar        fyne.CanvasObject
+	speed      *widget.Label
+	concurrent *widget.Select
+	cfg        *config.Config
+	qm         *queue.Manager
 }
 
-// NewStatusBar creates a new StatusBar.
-func NewStatusBar() *StatusBar {
-	sb := &StatusBar{label: widget.NewLabel("0 B/s  ·  0 active  ·  0 downloads")}
-	sb.label.Alignment = fyne.TextAlignTrailing
-	sb.label.Importance = widget.LowImportance
-	content := container.New(layout.NewCustomPaddedLayout(4, 4, 12, 12), sb.label)
-	sb.bar = container.NewBorder(widget.NewSeparator(), nil, nil, nil, content)
-
+func NewStatusBar(cfg *config.Config, qm *queue.Manager) *StatusBar {
+	sb := &StatusBar{cfg: cfg, qm: qm, speed: widget.NewLabel("Overall Speed: 0 B/s")}
+	sb.speed.Importance = widget.LowImportance
+	values := []string{"1", "2", "3", "4", "5", "8", "12", "16"}
+	selectWidget := widget.NewSelect(values, func(value string) {
+		if cfg == nil || qm == nil {
+			return
+		}
+		var n int
+		if _, err := fmt.Sscanf(value, "%d", &n); err == nil {
+			cfg.MaxConcurrent = n
+			qm.SetMaxConcurrent(n)
+			_ = cfg.Save()
+		}
+	})
+	sb.concurrent = selectWidget
+	if cfg != nil {
+		selectWidget.SetSelected(fmt.Sprintf("%d", cfg.MaxConcurrent))
+	}
+	label := widget.NewLabel("Concurrent Downloads")
+	label.Importance = widget.LowImportance
+	right := container.NewHBox(label, selectWidget)
+	content := container.NewBorder(nil, nil, container.NewHBox(widget.NewIcon(theme.DownloadIcon()), sb.speed), right, layout.NewSpacer())
+	sb.bar = container.NewBorder(widget.NewSeparator(), nil, nil, nil, container.New(layout.NewCustomPaddedLayout(6, 6, 18, 18), content))
 	return sb
 }
 
-// Container returns the status bar canvas object.
 func (sb *StatusBar) Container() fyne.CanvasObject { return sb.bar }
 
-// Update refreshes all labels.
-//   - totalSpeed: combined bytes/sec across all active downloads.
-//   - activeCount: number of downloads currently downloading.
-//   - totalCount: total non-deleted records.
-func (sb *StatusBar) Update(totalSpeed float64, activeCount, totalCount int) {
+func (sb *StatusBar) Update(totalSpeed float64, _ int, _ int) {
 	fyne.Do(func() {
-		sb.label.SetText(fmt.Sprintf("%s/s  ·  %d active  ·  %d downloads",
-			FormatSize(int64(totalSpeed)), activeCount, totalCount))
+		sb.speed.SetText(fmt.Sprintf("Overall Speed: %s/s", FormatSize(int64(totalSpeed))))
 	})
 }

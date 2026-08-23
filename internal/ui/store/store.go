@@ -71,6 +71,7 @@ type Store interface {
 
 	// View state — filters are applied on the in-memory slice, not on DB.
 	SetFilter(status DownloadStatus)
+	// SetCategory uses an empty string for the UI-only All category.
 	SetCategory(category string)
 	SetSearch(query string)
 	SetSort(col TableColumn, asc bool)

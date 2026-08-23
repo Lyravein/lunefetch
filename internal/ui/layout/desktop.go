@@ -3,11 +3,13 @@ package layout
 
 import (
 	"fmt"
+	"image/color"
 	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
@@ -15,9 +17,11 @@ import (
 
 	"github.com/lyravein/lunefetch/internal/config"
 	"github.com/lyravein/lunefetch/internal/core"
+	"github.com/lyravein/lunefetch/internal/filecat"
 	"github.com/lyravein/lunefetch/internal/notify"
 	"github.com/lyravein/lunefetch/internal/queue"
 	"github.com/lyravein/lunefetch/internal/storage"
+	"github.com/lyravein/lunefetch/internal/ui/assets"
 	"github.com/lyravein/lunefetch/internal/ui/components"
 	"github.com/lyravein/lunefetch/internal/ui/pages"
 	"github.com/lyravein/lunefetch/internal/ui/store"
@@ -44,6 +48,8 @@ type App struct {
 	history   *pages.HistoryPage
 	statusBar *components.StatusBar
 	sidebar   *components.Sidebar
+	header    *components.ContentHeader
+	summaries *components.SummaryCards
 
 	// lastSize tracks the window size so we only persist on change.
 	lastSize         fyne.Size
@@ -56,16 +62,17 @@ type App struct {
 const (
 	prefWindowWidth  = "window.width"
 	prefWindowHeight = "window.height"
+	minWindowWidth   = 1000
+	minWindowHeight  = 640
 )
 
 // New creates the Fyne app and wires everything together.
 func New(sm *storage.StateManager, cfg *config.Config) *App {
 	a := app.NewWithID("io.github.lyravein.lunefetch")
 	a.Settings().SetTheme(uitheme.NewNavy())
-	if icon, err := fyne.LoadResourceFromPath("lunefetch.ico"); err == nil {
-		a.SetIcon(icon)
-	}
+	a.SetIcon(assets.AppIcon)
 	w := a.NewWindow("Lunefetch")
+	w.SetIcon(assets.AppIcon)
 
 	// Restore persisted window size, falling back to a sane default.
 	// Upper clamps guard against previously corrupted (runaway) values.
@@ -73,7 +80,7 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 	ww := float32(prefs.Float(prefWindowWidth))
 	wh := float32(prefs.Float(prefWindowHeight))
 	if ww < 760 || wh < 480 || ww > 2400 || wh > 1600 {
-		ww, wh = 900, 600
+		ww, wh = minWindowWidth, minWindowHeight
 	}
 	w.Resize(fyne.NewSize(ww, wh))
 
@@ -100,8 +107,13 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 
 	// Build pages.
 	guiApp.downloads = pages.NewDownloadsPage(sm, cfg, &guiApp.globalLimiter, guiApp.st)
-	guiApp.downloads.SetNotifier(notify.New(cfg.Notifications))
+	notifier := notify.New(cfg.Notifications)
+	// Fyne's SendNotification is the only mechanism that works on Windows;
+	// notify-send is a Linux-only fallback.
+	notifier.SetApp(a)
+	guiApp.downloads.SetNotifier(notifier)
 	guiApp.history = pages.NewHistoryPage(sm, w)
+	guiApp.history.SetPurgeCleaner(guiApp.downloads.RemovePartFile)
 
 	// Queue manager — StartFunc is downloads.StartDownload.
 	guiApp.qm = queue.NewManager(sm, cfg.MaxConcurrent, guiApp.downloads.StartDownload)
@@ -114,15 +126,14 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 	// Load initial state into store.
 	guiApp.st.Load() //nolint:errcheck
 
-	toolbar := components.NewToolbarFull(w, cfg, &guiApp.globalLimiter, guiApp.qm, guiApp.st.Selected, guiApp.downloads, guiApp.AddURLCh, func(query string) {
+	guiApp.header = components.NewContentHeader(w, cfg, guiApp.AddURLCh, func(query string) {
 		guiApp.st.SetSearch(query)
 		guiApp.downloads.Refresh()
 	})
-	toolbar.UpdateSelection(nil)
-	guiApp.downloads.SetOnSelectionChanged(toolbar.UpdateSelection)
+	guiApp.summaries = components.NewSummaryCards()
 
 	// Build status bar.
-	guiApp.statusBar = components.NewStatusBar()
+	guiApp.statusBar = components.NewStatusBar(cfg, guiApp.qm)
 
 	// Sidebar — filters the download list or switches to history.
 	contentStack := container.NewStack(guiApp.downloads.Container())
@@ -130,7 +141,6 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 	guiApp.sidebar = components.NewSidebar(
 		func(f store.DownloadStatus) {
 			guiApp.onDownloadsRoute = true
-			toolbar.SetDownloadsActive(true)
 			contentStack.Objects = []fyne.CanvasObject{guiApp.downloads.Container()}
 			contentStack.Refresh()
 			guiApp.st.SetFilter(f)
@@ -138,7 +148,6 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 		},
 		func(category string) {
 			guiApp.onDownloadsRoute = true
-			toolbar.SetDownloadsActive(true)
 			contentStack.Objects = []fyne.CanvasObject{guiApp.downloads.Container()}
 			contentStack.Refresh()
 			guiApp.st.SetCategory(category)
@@ -147,24 +156,26 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 		func() {
 			guiApp.onDownloadsRoute = false
 			guiApp.st.Select(0)
-			toolbar.UpdateSelection(nil)
-			toolbar.SetDownloadsActive(false)
 			contentStack.Objects = []fyne.CanvasObject{guiApp.history.Container()}
 			contentStack.Refresh()
 			guiApp.history.Refresh()
 		},
 	)
+	guiApp.sidebar.SetFooterActions(
+		func() { components.ShowSettingsDialog(w, cfg, &guiApp.globalLimiter, guiApp.qm) },
+		func() { components.ShowAboutDialog(w) },
+	)
 
-	// Main layout:
-	//   toolbar on top
-	//   sidebar left | table center
-	//   status bar at the very bottom
 	sidebar := container.NewBorder(nil, nil, nil, widget.NewSeparator(), guiApp.sidebar.Container())
-	body := container.NewBorder(nil, nil, sidebar, nil, contentStack)
-	root := container.NewBorder(toolbar.Root, guiApp.statusBar.Container(), nil, nil, body)
-	w.SetContent(root)
+	mainContent := container.NewBorder(guiApp.summaries.Root, nil, nil, nil, contentStack)
+	main := container.NewBorder(guiApp.header.Root, nil, nil, nil, mainContent)
+	body := container.NewBorder(nil, nil, sidebar, nil, main)
+	root := container.NewBorder(nil, guiApp.statusBar.Container(), nil, nil, body)
+	minimum := canvas.NewRectangle(color.Transparent)
+	minimum.SetMinSize(fyne.NewSize(minWindowWidth, minWindowHeight))
+	w.SetContent(container.NewStack(minimum, root))
 
-	guiApp.registerShortcuts(toolbar)
+	guiApp.registerShortcuts(guiApp.header)
 	w.SetCloseIntercept(func() {
 		if cfg.CloseToTray {
 			w.Hide()
@@ -200,18 +211,21 @@ func (a *App) configureSystemTray() {
 		fyne.NewMenuItem("Quit", quit),
 	))
 	desk.SetSystemTrayWindow(a.window)
-	if icon, err := fyne.LoadResourceFromPath("lunefetch.ico"); err == nil {
-		desk.SetSystemTrayIcon(icon)
-	}
+	desk.SetSystemTrayIcon(assets.AppIcon)
 }
 
 // registerShortcuts wires global keyboard shortcuts onto the window canvas.
 //
 //	Ctrl+N  — open Add URL dialog
 //	Ctrl+F  — focus the search entry
+//	Ctrl+C  — copy the selected download's URL
+//	Ctrl+P  — pause all active downloads
 //	Delete  — remove the selected download (with confirm)
 //	Space   — pause/resume the selected download
-func (a *App) registerShortcuts(tb *components.Toolbar) {
+//
+// Every shortcut that is also meaningful inside a text field checks
+// entryFocused() first, so typing in search is never hijacked.
+func (a *App) registerShortcuts(header *components.ContentHeader) {
 	canvas := a.window.Canvas()
 
 	// entryFocused reports whether keyboard focus is inside a text entry —
@@ -231,7 +245,28 @@ func (a *App) registerShortcuts(tb *components.Toolbar) {
 			if !a.onDownloadsRoute {
 				return
 			}
-			canvas.Focus(tb.Search)
+			canvas.Focus(header.Search)
+		})
+
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyC, Modifier: fyne.KeyModifierControl},
+		func(fyne.Shortcut) {
+			// Inside a text entry Ctrl+C must keep copying the selection.
+			if !a.onDownloadsRoute || entryFocused() {
+				return
+			}
+			sel := a.st.Selected()
+			if sel == nil {
+				return
+			}
+			a.window.Clipboard().SetContent(sel.URL)
+		})
+
+	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyP, Modifier: fyne.KeyModifierControl},
+		func(fyne.Shortcut) {
+			if entryFocused() {
+				return
+			}
+			a.downloads.PauseAll()
 		})
 
 	canvas.AddShortcut(&desktop.CustomShortcut{KeyName: fyne.KeyDelete},
@@ -290,19 +325,19 @@ func (a *App) refreshLoop() {
 		a.st.Load() //nolint:errcheck
 		a.downloads.Refresh()
 
-		// Update sidebar badge counts from all records (unfiltered).
+		// Update status summaries from all records (unfiltered).
 		allRecords, _ := a.sm.ListDownloads()
-		a.sidebar.UpdateCounts(allRecords)
+		counts := make(map[string]int)
+		for i := range allRecords {
+			counts[allRecords[i].Status]++
+		}
+		a.summaries.Update(counts)
 
 		// Update status bar.
 		totalSpeed := a.downloads.SpeedTotal()
 		activeCount := a.downloads.ActiveCount()
 		totalCount := len(allRecords)
 		a.statusBar.Update(totalSpeed, activeCount, totalCount)
-
-		// The table receives the center viewport width. DownloadsPage then
-		// reserves Fyne's cell gaps and vertical scrollbar from column widths.
-		a.downloads.SetTableWidth(a.window.Canvas().Size().Width - 196)
 
 		// Persist window size when it changes.
 		a.persistWindowSize()
@@ -381,6 +416,10 @@ func (a *App) HandleAdd(req store.AddRequest) {
 		components.ShowError(a.window, fmt.Sprintf("Invalid filename:\n%v", err))
 		return
 	}
+	category := req.Category
+	if category == "" {
+		category = string(filecat.FromFilename(filename))
+	}
 
 	original := filename
 	ext := extOf(original)
@@ -409,7 +448,7 @@ func (a *App) HandleAdd(req store.AddRequest) {
 		starts[i] = c.Start
 		ends[i] = c.End
 	}
-	id, err := a.sm.CreateDownloadWithChunks(req.URL, filename, saveDir, req.Category, info.Size, info.SupportsRange, starts, ends, info.ETag, info.LastModified)
+	id, err := a.sm.CreateDownloadWithChunks(req.URL, filename, saveDir, category, info.Size, info.SupportsRange, starts, ends, info.ETag, info.LastModified)
 	if err != nil {
 		components.ShowError(a.window, fmt.Sprintf("Failed to save download:\n%v", err))
 		return

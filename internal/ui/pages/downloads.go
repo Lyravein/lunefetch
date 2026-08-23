@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image/color"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -47,15 +45,10 @@ type DownloadsPage struct {
 	window        fyne.Window
 	notifier      *notify.Notifier
 
-	cnt                fyne.CanvasObject
-	table              *components.DownloadTable
-	emptyState         fyne.CanvasObject
-	stack              *fyne.Container // stack: shows table or emptyState
-	details            *fyne.Container
-	detailName         *widget.Label
-	detailMeta         *widget.Label
-	detailURL          *widget.Label
-	onSelectionChanged func(*storage.DownloadRecord)
+	cnt        fyne.CanvasObject
+	table      *components.DownloadTable
+	emptyState fyne.CanvasObject
+	stack      *fyne.Container // stack: shows table or emptyState
 
 	active       map[int64]*downloadEntry
 	pending      map[int64]struct{}
@@ -75,19 +68,6 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 		pending:       make(map[int64]struct{}),
 	}
 
-	dp.detailName = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	dp.detailName.Truncation = fyne.TextTruncateEllipsis
-	dp.detailMeta = widget.NewLabel("")
-	dp.detailMeta.Importance = widget.LowImportance
-	dp.detailURL = widget.NewLabel("")
-	dp.detailURL.Importance = widget.LowImportance
-	dp.detailURL.Truncation = fyne.TextTruncateEllipsis
-	detailContent := container.NewVBox(dp.detailName, dp.detailMeta, dp.detailURL)
-	detailPanel := container.NewBorder(widget.NewSeparator(), nil, nil, nil, container.NewPadded(detailContent))
-	detailSize := canvas.NewRectangle(color.Transparent)
-	detailSize.SetMinSize(fyne.NewSize(1, 82))
-	dp.details = container.NewStack(detailSize, detailPanel)
-
 	dp.table = components.NewDownloadTable(
 		func(col store.TableColumn, asc bool) {
 			st.SetSort(col, asc)
@@ -95,11 +75,6 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 		},
 		func(id int64) {
 			st.Select(id)
-			selected := st.Selected()
-			dp.updateDetails(selected)
-			if dp.onSelectionChanged != nil {
-				dp.onSelectionChanged(selected)
-			}
 		},
 		func(id int64, action string) {
 			switch action {
@@ -123,6 +98,10 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 					}, dp.window)
 			case "open_folder":
 				dp.openFolder(id)
+			case "queue_up":
+				dp.MoveInQueue(id, -1)
+			case "queue_down":
+				dp.MoveInQueue(id, 1)
 			case "open_file":
 				rec, _ := dp.sm.GetDownload(id)
 				if rec != nil && (rec.Status == "completed" || rec.Status == "cancelled") {
@@ -160,6 +139,7 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 			}, dp.window)
 		},
 	)
+	dp.table.SetSpeedLimitHandler(dp.UpdateSpeedLimit)
 
 	// Empty state shown when no downloads exist.
 	emptyIcon := container.New(layout.NewGridWrapLayout(fyne.NewSize(42, 42)), widget.NewIcon(theme.DownloadIcon()))
@@ -176,33 +156,8 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 	))
 
 	dp.stack = container.NewStack(dp.emptyState)
-	dp.cnt = container.NewBorder(nil, dp.details, nil, nil, dp.stack)
+	dp.cnt = dp.stack
 	return dp
-}
-
-func (dp *DownloadsPage) updateDetails(rec *storage.DownloadRecord) {
-	fyne.Do(func() {
-		if rec == nil {
-			dp.detailName.SetText("Select a download to see its destination")
-			dp.detailMeta.SetText("")
-			dp.detailURL.SetText("")
-			return
-		}
-
-		progress := "Unknown size"
-		if rec.TotalSize > 0 {
-			pct := float64(rec.DownloadedSize) / float64(rec.TotalSize) * 100
-			progress = fmt.Sprintf("%.0f%% of %s", pct, components.FormatSize(rec.TotalSize))
-		}
-		dir := rec.SaveDir
-		if dir == "" {
-			dir = dp.cfg.DownloadDir
-		}
-
-		dp.detailName.SetText(rec.Filename)
-		dp.detailMeta.SetText(fmt.Sprintf("%s  ·  %s", progress, dir))
-		dp.detailURL.SetText(rec.URL)
-	})
 }
 
 // SetQueueManager injects the queue manager after construction.
@@ -214,11 +169,6 @@ func (dp *DownloadsPage) SetQueueManager(qm *queue.Manager) {
 func (dp *DownloadsPage) SetWindow(w fyne.Window) {
 	dp.window = w
 	dp.table.SetWindow(w)
-}
-
-// SetOnSelectionChanged registers a listener for toolbar action state.
-func (dp *DownloadsPage) SetOnSelectionChanged(fn func(*storage.DownloadRecord)) {
-	dp.onSelectionChanged = fn
 }
 
 // SetNotifier injects the optional desktop notification sender.
@@ -257,7 +207,10 @@ func openSystemPath(path string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", path)
+		// explorer.exe mangles forward slashes and treats a leading "/" as a
+		// switch, so normalize separators first. It also reports a non-zero exit
+		// code on success, which is why the error is ignored below.
+		cmd = exec.Command("explorer.exe", filepath.FromSlash(path))
 	case "darwin":
 		cmd = exec.Command("open", path)
 	default:
@@ -269,11 +222,6 @@ func openSystemPath(path string) {
 // Container returns the root canvas object for this page.
 // DownloadsPage owns only the table + empty state; toolbar lives in desktop.go.
 func (dp *DownloadsPage) Container() fyne.CanvasObject { return dp.cnt }
-
-// SetTableWidth lets the desktop layout keep the table columns responsive.
-func (dp *DownloadsPage) SetTableWidth(width float32) {
-	dp.table.SetAvailableWidth(components.ContentWidth(width))
-}
 
 // Refresh reads the current view from Store and redraws the table.
 func (dp *DownloadsPage) Refresh() {
@@ -288,12 +236,6 @@ func (dp *DownloadsPage) Refresh() {
 
 	dp.table.SetRecords(records)
 	dp.table.SetSpeeds(speeds)
-	selected := dp.st.Selected()
-	dp.updateDetails(selected)
-	if dp.onSelectionChanged != nil {
-		dp.onSelectionChanged(selected)
-	}
-
 	// Swap between empty state and table.
 	fyne.Do(func() {
 		if len(records) == 0 {
@@ -303,6 +245,25 @@ func (dp *DownloadsPage) Refresh() {
 		}
 		dp.stack.Refresh()
 	})
+}
+
+// partPath is the temporary file a download writes into before it is published.
+func partPath(saveDir string, id int64) string {
+	return filepath.Join(saveDir, fmt.Sprintf(".lunefetch-%d.part", id))
+}
+
+// RemovePartFile deletes a download's leftover temp file. Purging history rows
+// alone used to leave these behind in the user's download directory forever.
+func (dp *DownloadsPage) RemovePartFile(id int64) {
+	rec, err := dp.sm.GetDownload(id)
+	if err != nil || rec == nil {
+		return
+	}
+	saveDir := rec.SaveDir
+	if saveDir == "" {
+		saveDir = dp.cfg.DownloadDir
+	}
+	core.CleanupFile(partPath(saveDir, id)) //nolint:errcheck
 }
 
 // StartDownload is called by the queue manager to start a download by ID.
@@ -340,9 +301,10 @@ func (dp *DownloadsPage) StartDownload(id int64) {
 		dp.qm.OnDone(id)
 		return
 	}
-	tmpPath := filepath.Join(saveDir, fmt.Sprintf(".lunefetch-%d.part", id))
+	tmpPath := partPath(saveDir, id)
 
 	d := core.NewDownloader(rec.URL, tmpPath, rec.TotalSize, chunkDefs, rec.NumChunks, dp.cfg.MaxRetries)
+	d.SetRetryBackoff(time.Duration(dp.cfg.RetryBackoffS) * time.Second)
 	d.SetValidators(rec.ETag.String, rec.LastModified.String)
 	d.SetProgressCallback(func(chunkIndex int, downloaded int64, status string) {
 		dp.sm.UpdateChunkProgress(id, chunkIndex, downloaded, status) //nolint:errcheck
@@ -573,21 +535,67 @@ func (dp *DownloadsPage) Shutdown() {
 
 // PauseDownload stops a running download.
 func (dp *DownloadsPage) PauseDownload(id int64) {
+	if !dp.cancelActive(id) {
+		return
+	}
+	dp.sm.UpdateDownloadStatus(id, "paused") //nolint:errcheck
+}
+
+// cancelActive cancels the worker for id, reporting whether one was running.
+func (dp *DownloadsPage) cancelActive(id int64) bool {
 	dp.mu.RLock()
 	entry, ok := dp.active[id]
 	dp.mu.RUnlock()
 	if !ok {
-		return
+		return false
 	}
 	entry.mu.Lock()
 	entry.cancelFn()
 	entry.mu.Unlock()
-	dp.sm.UpdateDownloadStatus(id, "paused") //nolint:errcheck
+	return true
 }
 
 // ResumeDownload re-enqueues a paused download.
 func (dp *DownloadsPage) ResumeDownload(id int64) {
 	dp.qm.TryStart(id) //nolint:errcheck
+}
+
+// PauseAll pauses every running download.
+func (dp *DownloadsPage) PauseAll() {
+	for _, id := range dp.pauseActiveWorkers() {
+		dp.sm.UpdateDownloadStatus(id, "paused") //nolint:errcheck
+	}
+	dp.Refresh()
+}
+
+// pauseActiveWorkers cancels every active worker and returns the ids it paused.
+// The active set is snapshotted first so the map is not held while cancelling.
+func (dp *DownloadsPage) pauseActiveWorkers() []int64 {
+	dp.mu.RLock()
+	ids := make([]int64, 0, len(dp.active))
+	for id := range dp.active {
+		ids = append(ids, id)
+	}
+	dp.mu.RUnlock()
+
+	paused := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if dp.cancelActive(id) {
+			paused = append(paused, id)
+		}
+	}
+	return paused
+}
+
+// MoveInQueue moves a queued download earlier (delta -1) or later (delta +1) in
+// the queue. Storage clamps the move and ignores rows that are not queued, so an
+// edge row is a harmless no-op.
+func (dp *DownloadsPage) MoveInQueue(id int64, delta int) {
+	if err := dp.sm.MoveQueuePosition(id, delta); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Failed to reorder the queue:\n%v", err))
+		return
+	}
+	dp.Refresh()
 }
 
 // CancelDownload cancels a download and sets status to cancelled.
@@ -608,6 +616,24 @@ func (dp *DownloadsPage) DeleteDownload(id int64) {
 	dp.CancelDownload(id)
 	dp.qm.Remove(id)
 	dp.sm.DeleteDownload(id) //nolint:errcheck
+	dp.Refresh()
+}
+
+func (dp *DownloadsPage) UpdateSpeedLimit(id, speedLimit int64) {
+	if err := dp.sm.UpdateSpeedLimit(id, speedLimit); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Failed to update speed limit:\n%v", err))
+		return
+	}
+	dp.mu.RLock()
+	entry := dp.active[id]
+	dp.mu.RUnlock()
+	if entry != nil {
+		if speedLimit > 0 {
+			entry.downloader.SetLimiter(core.NewLimiter(speedLimit))
+		} else {
+			entry.downloader.SetLimiter(nil)
+		}
+	}
 	dp.Refresh()
 }
 

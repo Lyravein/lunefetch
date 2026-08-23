@@ -1,9 +1,6 @@
 package components
 
 import (
-	"fmt"
-	"image/color"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
@@ -12,11 +9,9 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/lyravein/lunefetch/internal/filecat"
-	"github.com/lyravein/lunefetch/internal/storage"
 	"github.com/lyravein/lunefetch/internal/ui/store"
 )
 
-// SidebarItem represents one entry in the sidebar.
 type SidebarItem struct {
 	Label  string
 	Filter store.DownloadStatus
@@ -24,190 +19,189 @@ type SidebarItem struct {
 
 type categoryItem struct{ Label string }
 
+// sidebarWidth is the fixed width of the navigation rail.
+const sidebarWidth float32 = 260
+
 var categoryItems = func() []categoryItem {
 	items := filecat.All()
-	result := make([]categoryItem, len(items))
-	for i, category := range items {
-		result[i] = categoryItem{Label: string(category)}
+	result := make([]categoryItem, 0, len(items)+1)
+	result = append(result, categoryItem{Label: "All"})
+	for _, category := range items {
+		result = append(result, categoryItem{Label: string(category)})
 	}
 	return result
 }()
 
 var sidebarItems = []SidebarItem{
-	{"All", store.StatusAll},
+	{"All Downloads", store.StatusAll},
 	{"Downloading", store.StatusDownloading},
-	{"Paused", store.StatusPaused},
-	{"Queue", store.StatusQueued},
+	{"Queued", store.StatusQueued},
 	{"Scheduled", store.StatusScheduled},
-	{"Failed", store.StatusFailed},
 	{"Completed", store.StatusCompleted},
+	{"Paused", store.StatusPaused},
+	{"Failed", store.StatusFailed},
 }
 
-// Sidebar is a fixed-width navigation panel that filters the download list.
 type Sidebar struct {
-	container      fyne.CanvasObject
-	list           *widget.List
-	categoryList   *widget.List
-	selected       int
-	counts         map[store.DownloadStatus]int
-	categoryCounts map[string]int
-	onSelect       func(store.DownloadStatus)
-	onCategory     func(string)
+	container  fyne.CanvasObject
+	filters    []*widget.Button
+	categories []*widget.Button
+	selected   int
+	onSelect   func(store.DownloadStatus)
+	onCategory func(string)
+	onSettings func()
+	onHistory  func()
+	onAbout    func()
 }
 
-// NewSidebar creates a sidebar with fixed width.
+// NewSidebar builds the navigation rail. Routes are plain buttons inside one
+// scroll area rather than nested widget.List scrollers: the rail has a small,
+// fixed set of rows, and nested scrollers previously clipped or leaked rows at
+// the 1000x640 minimum window size.
 func NewSidebar(onSelect func(store.DownloadStatus), onCategory func(string), onHistory func()) *Sidebar {
-	sb := &Sidebar{
-		selected:       0,
-		counts:         make(map[store.DownloadStatus]int),
-		categoryCounts: make(map[string]int),
-		onSelect:       onSelect,
-		onCategory:     onCategory,
+	sb := &Sidebar{selected: 0, onSelect: onSelect, onCategory: onCategory, onHistory: onHistory}
+
+	filterRows := make([]fyne.CanvasObject, 0, len(sidebarItems))
+	sb.filters = make([]*widget.Button, 0, len(sidebarItems))
+	for i, item := range sidebarItems {
+		i, item := i, item
+		btn := widget.NewButtonWithIcon(item.Label, iconForFilter(item.Filter), func() {
+			sb.selectFilterAt(i, true)
+		})
+		btn.Alignment = widget.ButtonAlignLeading
+		btn.IconPlacement = widget.ButtonIconLeadingText
+		btn.Importance = widget.LowImportance
+		sb.filters = append(sb.filters, btn)
+		filterRows = append(filterRows, btn)
 	}
 
-	sb.categoryList = widget.NewList(
-		func() int { return len(categoryItems) },
-		func() fyne.CanvasObject {
-			icon := widget.NewIcon(theme.FolderIcon())
-			label := widget.NewLabel("category")
-			badge := widget.NewLabel("")
-			badge.Alignment = fyne.TextAlignTrailing
-			return container.NewHBox(icon, label, layout.NewSpacer(), badge)
-		},
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			hbox := o.(*fyne.Container)
-			label := hbox.Objects[1].(*widget.Label)
-			badge := hbox.Objects[3].(*widget.Label)
-			label.SetText(categoryItems[i].Label)
-			if count := sb.categoryCounts[categoryItems[i].Label]; count > 0 {
-				badge.SetText(fmt.Sprintf("%d", count))
-			} else {
-				badge.SetText("")
+	categoryRows := make([]fyne.CanvasObject, 0, len(categoryItems))
+	sb.categories = make([]*widget.Button, 0, len(categoryItems))
+	for i, item := range categoryItems {
+		i, item := i, item
+		btn := widget.NewButtonWithIcon(item.Label, theme.FolderIcon(), func() {
+			sb.selectCategoryAt(i)
+			category := item.Label
+			if category == "All" {
+				category = ""
 			}
-		},
-	)
-	for i := range categoryItems {
-		sb.categoryList.SetItemHeight(i, 36)
-	}
-	sb.categoryList.OnSelected = func(i widget.ListItemID) {
-		sb.list.UnselectAll()
-		if sb.onCategory != nil {
-			sb.onCategory(categoryItems[i].Label)
-		}
-	}
-
-	sb.list = widget.NewList(
-		func() int { return len(sidebarItems) },
-		func() fyne.CanvasObject {
-			icon := widget.NewIcon(theme.DocumentIcon())
-			label := widget.NewLabel("item")
-			badge := widget.NewLabel("")
-			badge.Alignment = fyne.TextAlignTrailing
-			return container.NewHBox(icon, label, layout.NewSpacer(), badge)
-		},
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			hbox := o.(*fyne.Container)
-			// HBox objects: [0]=icon, [1]=label, [2]=spacer, [3]=badge
-			icon := hbox.Objects[0].(*widget.Icon)
-			label := hbox.Objects[1].(*widget.Label)
-			badge := hbox.Objects[3].(*widget.Label)
-
-			item := sidebarItems[i]
-
-			if i == sb.selected {
-				label.TextStyle = fyne.TextStyle{Bold: true}
-			} else {
-				label.TextStyle = fyne.TextStyle{}
+			if sb.onCategory != nil {
+				sb.onCategory(category)
 			}
-			label.SetText(item.Label)
-			icon.SetResource(iconForFilter(item.Filter))
-
-			// Show count badge.
-			count := sb.counts[item.Filter]
-			if item.Filter == store.StatusAll {
-				// Sum all statuses for "All".
-				var total int
-				for _, c := range sb.counts {
-					total += c
-				}
-				count = total
-			}
-			if count > 0 {
-				badge.SetText(fmt.Sprintf("%d", count))
-			} else {
-				badge.SetText("")
-			}
-		},
-	)
-	for i := range sidebarItems {
-		sb.list.SetItemHeight(i, 36)
+		})
+		btn.Alignment = widget.ButtonAlignLeading
+		btn.IconPlacement = widget.ButtonIconLeadingText
+		btn.Importance = widget.LowImportance
+		sb.categories = append(sb.categories, btn)
+		categoryRows = append(categoryRows, btn)
 	}
+	sb.markSelected()
 
-	sb.list.OnSelected = func(i widget.ListItemID) {
-		sb.categoryList.UnselectAll()
-		sb.selected = i
-		sb.list.Refresh()
-		if sb.onSelect != nil {
-			sb.onSelect(sidebarItems[i].Filter)
-		}
-	}
-
-	// The transparent background fixes only the sidebar's minimum width.
-	// NewGridWrapLayout previously fixed both dimensions to 180x100, which
-	// clipped the list and left most of the left side empty.
 	background := canvas.NewRectangle(theme.Color(theme.ColorNameHeaderBackground))
-	background.SetMinSize(fyne.NewSize(176, 1))
-	heading := widget.NewLabelWithStyle("DOWNLOADS", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	heading.Importance = widget.LowImportance
+	background.SetMinSize(fyne.NewSize(sidebarWidth, 1))
+
+	brand := widget.NewLabelWithStyle("Lunefetch", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	subtitle := widget.NewLabel("Download Manager")
+	subtitle.Importance = widget.LowImportance
+	header := container.New(layout.NewCustomPaddedLayout(16, 10, 16, 16), container.NewVBox(brand, subtitle))
+
 	categoryHeading := widget.NewLabelWithStyle("CATEGORIES", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	categoryHeading.Importance = widget.LowImportance
-	header := container.New(layout.NewCustomPaddedLayout(14, 8, 12, 12), heading)
-	list := container.New(layout.NewCustomPaddedLayout(0, 8, 6, 6), sb.list)
-	categoryListSize := canvas.NewRectangle(color.Transparent)
-	categoryListSize.SetMinSize(fyne.NewSize(1, float32(len(categoryItems))*36))
-	categoryList := container.NewStack(categoryListSize, sb.categoryList)
-	categories := container.NewBorder(container.New(layout.NewCustomPaddedLayout(14, 8, 12, 12), categoryHeading), nil, nil, nil, categoryList)
-	historyButton := widget.NewButtonWithIcon("History", theme.HistoryIcon(), func() {
-		sb.list.UnselectAll()
-		sb.categoryList.UnselectAll()
-		if onHistory != nil {
-			onHistory()
+
+	navRows := make([]fyne.CanvasObject, 0, len(filterRows)+len(categoryRows)+2)
+	navRows = append(navRows, filterRows...)
+	navRows = append(navRows, widget.NewSeparator())
+	navRows = append(navRows, container.New(layout.NewCustomPaddedLayout(8, 2, 6, 6), categoryHeading))
+	navRows = append(navRows, categoryRows...)
+	nav := container.New(layout.NewCustomPaddedLayout(0, 8, 12, 12), container.NewVBox(navRows...))
+	navScroll := container.NewVScroll(nav)
+
+	settingsButton := widget.NewButtonWithIcon("Settings", theme.SettingsIcon(), func() {
+		if sb.onSettings != nil {
+			sb.onSettings()
 		}
 	})
-	history := container.New(layout.NewCustomPaddedLayout(8, 8, 12, 12), historyButton)
-	sb.container = container.NewStack(background, container.NewBorder(header, container.NewBorder(nil, history, nil, nil, categories), nil, nil, list))
+	historyButton := widget.NewButtonWithIcon("History", theme.HistoryIcon(), func() {
+		sb.clearSelection()
+		if sb.onHistory != nil {
+			sb.onHistory()
+		}
+	})
+	aboutButton := widget.NewButtonWithIcon("About", theme.InfoIcon(), func() {
+		if sb.onAbout != nil {
+			sb.onAbout()
+		}
+	})
 
+	// The footer is pinned below a scrolling nav area, so it needs its own opaque
+	// surface and a divider; otherwise scrolled rows show through behind it.
+	footerBackground := canvas.NewRectangle(theme.Color(theme.ColorNameHeaderBackground))
+	footerContent := container.New(layout.NewCustomPaddedLayout(10, 12, 16, 16), container.NewVBox(settingsButton, historyButton, aboutButton))
+	footer := container.NewStack(footerBackground, container.NewBorder(widget.NewSeparator(), nil, nil, nil, footerContent))
+
+	sb.container = container.NewStack(background, container.NewBorder(header, footer, nil, nil, navScroll))
 	return sb
 }
 
-// Container returns the sidebar canvas object.
 func (sb *Sidebar) Container() fyne.CanvasObject { return sb.container }
 
-// UpdateCounts refreshes badge counts from the given records.
-// Called from refreshLoop — does not query DB directly.
-func (sb *Sidebar) UpdateCounts(records []storage.DownloadRecord) {
-	counts := make(map[store.DownloadStatus]int)
-	categoryCounts := make(map[string]int)
-	for i := range records {
-		r := &records[i]
-		counts[store.DownloadStatus(r.Status)]++
-		categoryCounts[r.Category]++
-	}
-	fyne.Do(func() {
-		sb.counts = counts
-		sb.categoryCounts = categoryCounts
-		sb.list.Refresh()
-		sb.categoryList.Refresh()
-	})
+func (sb *Sidebar) SetFooterActions(onSettings, onAbout func()) {
+	sb.onSettings = onSettings
+	sb.onAbout = onAbout
 }
 
-// SelectFilter programmatically selects the sidebar entry matching status.
+// SelectFilter activates a status route, mirroring a user click.
 func (sb *Sidebar) SelectFilter(status store.DownloadStatus) {
 	for i, item := range sidebarItems {
 		if item.Filter == status {
-			sb.selected = i
-			sb.list.Select(i)
+			sb.selectFilterAt(i, true)
 			return
+		}
+	}
+}
+
+func (sb *Sidebar) selectFilterAt(index int, notify bool) {
+	if index < 0 || index >= len(sidebarItems) {
+		return
+	}
+	sb.selected = index
+	sb.markSelected()
+	if notify && sb.onSelect != nil {
+		sb.onSelect(sidebarItems[index].Filter)
+	}
+}
+
+func (sb *Sidebar) selectCategoryAt(index int) {
+	sb.selected = -1
+	sb.markSelected()
+	if index >= 0 && index < len(sb.categories) {
+		sb.categories[index].Importance = widget.MediumImportance
+		sb.categories[index].Refresh()
+	}
+}
+
+func (sb *Sidebar) clearSelection() {
+	sb.selected = -1
+	sb.markSelected()
+}
+
+// markSelected paints the active route. Fyne buttons have no dedicated selected
+// state, so medium importance is used as the active surface.
+func (sb *Sidebar) markSelected() {
+	for i, btn := range sb.filters {
+		want := widget.LowImportance
+		if i == sb.selected {
+			want = widget.MediumImportance
+		}
+		if btn.Importance != want {
+			btn.Importance = want
+			btn.Refresh()
+		}
+	}
+	for _, btn := range sb.categories {
+		if btn.Importance != widget.LowImportance {
+			btn.Importance = widget.LowImportance
+			btn.Refresh()
 		}
 	}
 }

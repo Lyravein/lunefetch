@@ -44,14 +44,14 @@ func TestDescendingSortIsStrictAndDeterministic(t *testing.T) {
 
 func TestFilterCategoryAndSearchCompose(t *testing.T) {
 	sm, s := newTestStore(t)
-	video, err := sm.CreateDownload("https://example.com/demo.mp4", "Demo Movie.mp4", t.TempDir(), "Videos", 10, true, 1)
+	video, err := sm.CreateDownload("https://example.com/demo.mp4", "Demo Movie.mp4", t.TempDir(), "Media", 10, true, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := sm.UpdateDownloadStatus(video, "failed"); err != nil {
 		t.Fatal(err)
 	}
-	music, err := sm.CreateDownload("https://example.com/demo.mp3", "Demo Song.mp3", t.TempDir(), "Music", 10, true, 1)
+	music, err := sm.CreateDownload("https://example.com/demo.mp3", "Demo Song.mp3", t.TempDir(), "Media", 10, true, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,14 +69,19 @@ func TestFilterCategoryAndSearchCompose(t *testing.T) {
 		t.Fatalf("failed + search = %#v, want only video %d", got, video)
 	}
 
-	s.SetCategory("Music")
+	s.SetCategory("Media")
 	got = s.Downloads()
-	if len(got) != 0 {
-		t.Fatalf("category must clear status but preserve search: got %#v", got)
+	if len(got) != 1 || got[0].ID != video {
+		t.Fatalf("category must clear status but preserve search: got %#v, want video %d", got, video)
 	}
 	s.SetSearch("song")
 	got = s.Downloads()
 	if len(got) != 1 || got[0].ID != music {
-		t.Fatalf("music + song = %#v, want only music %d", got, music)
+		t.Fatalf("media + song = %#v, want only music %d", got, music)
+	}
+	s.SetCategory("All")
+	s.SetSearch("")
+	if got = s.Downloads(); len(got) != 2 {
+		t.Fatalf("UI All category returned %d records, want 2", len(got))
 	}
 }

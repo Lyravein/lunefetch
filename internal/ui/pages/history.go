@@ -22,6 +22,23 @@ type HistoryPage struct {
 	list    *widget.List
 	records []storage.DownloadRecord
 	mu      sync.RWMutex
+
+	// onPurge removes a record's leftover temp file. Purging only deletes rows,
+	// so without this the .part file stays in the download directory forever.
+	onPurge func(id int64)
+}
+
+// SetPurgeCleaner registers a hook invoked with each id just before it is
+// permanently purged, so its temporary file can be removed too.
+func (hp *HistoryPage) SetPurgeCleaner(fn func(id int64)) { hp.onPurge = fn }
+
+func (hp *HistoryPage) cleanup(ids ...int64) {
+	if hp.onPurge == nil {
+		return
+	}
+	for _, id := range ids {
+		hp.onPurge(id)
+	}
 }
 
 // NewHistoryPage creates the history page.
@@ -48,6 +65,13 @@ func NewHistoryPage(sm *storage.StateManager, w fyne.Window) *HistoryPage {
 			"Permanently delete all history entries?",
 			func(ok bool) {
 				if ok {
+					hp.mu.RLock()
+					ids := make([]int64, 0, len(hp.records))
+					for _, rec := range hp.records {
+						ids = append(ids, rec.ID)
+					}
+					hp.mu.RUnlock()
+					hp.cleanup(ids...)
 					sm.PurgeAllDeleted() //nolint:errcheck
 					hp.Refresh()
 				}
@@ -125,6 +149,7 @@ func (hp *HistoryPage) updateHistoryRow(o fyne.CanvasObject, rec storage.Downloa
 			fmt.Sprintf("Permanently delete %q from history?", rec.Filename),
 			func(ok bool) {
 				if ok {
+					hp.cleanup(id)
 					hp.sm.PurgeDownload(id) //nolint:errcheck
 					hp.Refresh()
 				}
