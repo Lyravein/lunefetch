@@ -16,13 +16,14 @@ Features:
 
 - Automatically hand off matching downloads while preserving the browser download when Lunefetch is unavailable.
 - Send links, images, video, and audio through the browser context menu.
-- See native-host connection status from the toolbar popup.
+- Review and select page links before sending them as a batch.
+- See native-host connection status from the toolbar popup, and retry recent failures.
 - Configure file-extension, MIME-type, allowlist, blocklist, and temporary site-bypass rules.
 - Keep cookies, authorization headers, referrers, and request bodies inside the browser.
 
 The separate Lunefetch desktop application and native messaging host are
 required. The extension is designed for replayable, unauthenticated HTTP and
-HTTPS URLs.
+HTTPS URLs. Firefox 142 or newer is required.
 
 ## Support
 

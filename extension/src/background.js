@@ -3,6 +3,7 @@ import {
   createHandoffController,
   DEFAULT_SETTINGS,
   diagnosticFor,
+  isAbsoluteDir,
   isDownloadFilename,
   isDownloadMime,
   isDownloadMimeValue,
@@ -17,9 +18,27 @@ const isFirefox = typeof browser !== "undefined";
 const ext = isFirefox ? browser : chrome;
 const adapter = createBrowserAdapter(ext, isFirefox);
 const handoff = createHandoffController(adapter);
+
+const MAX_FAILURES = 10;
+const MAX_BATCH_ITEMS = 100;
+const BATCH_DRAFT_TTL_MS = 10 * 60 * 1000;
+const BYPASS_TTL_MS = 60 * 60 * 1000;
+
 let settings = normalizeSettings(DEFAULT_SETTINGS);
 let connection = { success: false, outcome: "app_unavailable", message: "Checking Lunefetch connection" };
 let failures = [];
+
+// The Chromium service worker is terminated when idle and restarted by the next
+// event, which resets every module-scope variable above. Listeners must be
+// registered synchronously at the top level (MV3 drops listeners added after an
+// await), so each one awaits this promise before reading state. Without it a
+// download could be intercepted using default settings even though the user had
+// disabled interception.
+let readyPromise;
+function ready() {
+  if (!readyPromise) readyPromise = start();
+  return readyPromise;
+}
 
 function storageGet(key) {
   return browserCall(ext.storage.local.get.bind(ext.storage.local), key).then((result) => result[key]);
@@ -27,6 +46,10 @@ function storageGet(key) {
 
 function storageSet(values) {
   return browserCall(ext.storage.local.set.bind(ext.storage.local), values);
+}
+
+function storageRemove(key) {
+  return browserCall(ext.storage.local.remove.bind(ext.storage.local), key);
 }
 
 function browserCall(fn, ...args) {
@@ -48,8 +71,8 @@ async function saveSettings(next) {
 async function loadSettings() {
   settings = normalizeSettings(await storageGet("settings"));
   const storedFailures = await storageGet("handoffFailures");
-  failures = Array.isArray(storedFailures) ? storedFailures : [];
-  await storageSet({ settings, handoffFailures: failures.slice(0, 10) });
+  failures = Array.isArray(storedFailures) ? storedFailures.slice(0, MAX_FAILURES) : [];
+  await storageSet({ settings, handoffFailures: failures });
 }
 
 async function rememberFailure(result, item) {
@@ -62,7 +85,7 @@ async function rememberFailure(result, item) {
     outcome: result.outcome,
     message: diagnosticFor(result),
     timestamp: Date.now(),
-  }, ...failures].slice(0, 10);
+  }, ...failures].slice(0, MAX_FAILURES);
   await storageSet({ handoffFailures: failures });
 }
 
@@ -99,10 +122,50 @@ async function refreshUI() {
   if (ext.action?.setTitle) {
     await ext.action.setTitle({ title: settings.enabled ? diagnosticFor(connection) : "Lunefetch interception is off" });
   }
-  if (ext.contextMenus?.update) {
-    await ext.contextMenus.update("lunefetch-download", { visible: settings.enabled && settings.contextMenu });
-    await ext.contextMenus.update("lunefetch-download-all", { visible: settings.enabled && settings.contextMenu });
+  await updateContextMenuVisibility();
+}
+
+async function updateContextMenuVisibility() {
+  if (!ext.contextMenus?.update) return;
+  const visible = settings.enabled && settings.contextMenu;
+  for (const id of ["lunefetch-download", "lunefetch-download-all"]) {
+    // A restarted worker may not have recreated the items yet; a missing id is
+    // not an error worth surfacing.
+    try {
+      await ext.contextMenus.update(id, { visible });
+    } catch {
+      /* menu not present yet */
+    }
   }
+}
+
+// createContextMenus is idempotent: contextMenus.create rejects duplicate ids,
+// and the service worker re-runs this file on every restart.
+async function createContextMenus() {
+  if (!ext.contextMenus?.create) return;
+  if (ext.contextMenus.removeAll) {
+    await new Promise((resolve) => {
+      try {
+        const maybe = ext.contextMenus.removeAll(resolve);
+        if (maybe && typeof maybe.then === "function") maybe.then(resolve, resolve);
+      } catch {
+        resolve();
+      }
+    });
+  }
+  const visible = settings.enabled && settings.contextMenu;
+  ext.contextMenus.create({
+    id: "lunefetch-download",
+    title: "Download with Lunefetch",
+    contexts: ["link", "image", "video", "audio"],
+    visible,
+  });
+  ext.contextMenus.create({
+    id: "lunefetch-download-all",
+    title: "Download all with Lunefetch",
+    contexts: ["page"],
+    visible,
+  });
 }
 
 async function updateConnectionStatus() {
@@ -127,6 +190,7 @@ if (isFirefox && ext.webRequest) {
   ext.webRequest.onHeadersReceived.addListener(
     async (details) => {
       if (details.method !== "GET" || !isHTTPURL(details.url)) return {};
+      await ready();
       const headers = details.responseHeaders || [];
       const disposition = (headers.find((header) => header.name.toLowerCase() === "content-disposition")?.value || "").toLowerCase();
       const capture = disposition.includes("attachment") || isDownloadMime(headers, settings.mimeTypes) || isDownloadURL(details.url, settings.extensions);
@@ -144,6 +208,7 @@ if (isFirefox && ext.webRequest) {
 }
 
 ext.downloads.onCreated.addListener(async (item) => {
+  await ready();
   if (!mayIntercept(item.url)) return;
   const capture = isDownloadURL(item.url, settings.extensions)
     || isDownloadFilename(item.filename, settings.extensions)
@@ -159,26 +224,23 @@ ext.downloads.onCreated.addListener(async (item) => {
   if (outcome.error) console.error("Lunefetch: browser fallback failed:", outcome.error.message, item.url);
 });
 
-ext.contextMenus.create({
-  id: "lunefetch-download",
-  title: "Download with Lunefetch",
-  contexts: ["link", "image", "video", "audio"],
-});
-ext.contextMenus.create({
-  id: "lunefetch-download-all",
-  title: "Download all with Lunefetch",
-  contexts: ["page"],
-});
+if (ext.runtime.onInstalled?.addListener) {
+  ext.runtime.onInstalled.addListener(() => {
+    ready().catch(() => {});
+  });
+}
 
 ext.contextMenus.onClicked.addListener(async (info, tab) => {
+  await ready();
   if (!settings.enabled || !settings.contextMenu) return;
   if (info.menuItemId === "lunefetch-download-all") {
+    if (!tab?.id) return;
     const results = await browserCall(ext.scripting.executeScript.bind(ext.scripting), {
       target: { tabId: tab.id },
       func: () => [...new Set([...document.querySelectorAll("a[href]")].map((link) => link.href)
         .filter((url) => url.startsWith("http://") || url.startsWith("https://")))].slice(0, 100),
     });
-    const urls = results?.[0]?.result || [];
+    const urls = (results?.[0]?.result || []).filter(isHTTPURL).slice(0, MAX_BATCH_ITEMS);
     await storageSet({ batchDraft: { source: tab.url || "", urls, createdAt: Date.now() } });
     await browserCall(ext.tabs.create.bind(ext.tabs), { url: ext.runtime.getURL("batch.html") });
     return;
@@ -192,7 +254,21 @@ ext.contextMenus.onClicked.addListener(async (info, tab) => {
   await sendWithFeedback(url);
 });
 
+// sanitizeHint keeps caller-supplied hints inside the shape the desktop API
+// accepts. The batch page is trusted code, but its inputs are user text.
+function sanitizeHint(item = {}) {
+  const url = String(item.url || "");
+  const filename = String(item.filename || "").trim();
+  const saveDir = String(item.saveDir || "").trim();
+  return {
+    url,
+    ...(filename ? { filename } : {}),
+    ...(saveDir && isAbsoluteDir(saveDir) ? { saveDir } : {}),
+  };
+}
+
 async function handleMessage(message) {
+  await ready();
   if (message?.type === "get-state") return { settings, connection, diagnostic: diagnosticFor(connection), failures };
   if (message?.type === "refresh-status") {
     await updateConnectionStatus();
@@ -202,29 +278,34 @@ async function handleMessage(message) {
   if (message?.type === "reset-settings") return saveSettings(DEFAULT_SETTINGS);
   if (message?.type === "bypass-site") {
     const host = normalizeSiteRule(message.host);
-    if (!host) return Promise.reject(new Error("Invalid site"));
-    return saveSettings({ ...settings, bypassUntil: { ...settings.bypassUntil, [host]: Date.now() + 60 * 60 * 1000 } });
+    if (!host) throw new Error("Invalid site");
+    return saveSettings({ ...settings, bypassUntil: { ...settings.bypassUntil, [host]: Date.now() + BYPASS_TTL_MS } });
   }
-  if (message?.type === "send-download") return sendWithFeedback(message.item?.url, message.item || {});
+  if (message?.type === "send-download") {
+    const item = sanitizeHint(message.item);
+    return sendWithFeedback(item.url, item);
+  }
   if (message?.type === "send-batch") {
-    const items = Array.isArray(message.items) ? message.items.slice(0, 100) : [];
+    const items = Array.isArray(message.items) ? message.items.slice(0, MAX_BATCH_ITEMS) : [];
     const results = [];
-    for (const item of items) results.push(await sendWithFeedback(item.url, item));
+    for (const raw of items) {
+      const item = sanitizeHint(raw);
+      results.push(await sendWithFeedback(item.url, item));
+    }
     return results;
   }
   if (message?.type === "retry-failure") {
     const failed = failures.find((item) => item.id === message.id);
-    if (!failed) return Promise.reject(new Error("Failure entry no longer exists"));
+    if (!failed) throw new Error("Failure entry no longer exists");
     const result = await sendWithFeedback(failed.url, failed, false);
     if (result.success) {
       failures = failures.filter((item) => item.id !== failed.id);
-      await storageSet({ handoffFailures: failures });
     } else {
       failures = failures.map((item) => item.id === failed.id
         ? { ...item, outcome: result.outcome, message: diagnosticFor(result), timestamp: Date.now() }
         : item);
-      await storageSet({ handoffFailures: failures });
     }
+    await storageSet({ handoffFailures: failures });
     return result;
   }
   if (message?.type === "clear-failures") {
@@ -235,18 +316,60 @@ async function handleMessage(message) {
   return undefined;
 }
 
-ext.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Only this extension's own pages may drive handoffs. Without the sender check a
+// web page that learns the extension id (or any other installed extension) could
+// post messages here and queue downloads.
+function isTrustedSender(sender) {
+  if (!sender) return false;
+  if (sender.id && sender.id !== ext.runtime.id) return false;
+  // A tab-scoped sender is a content script or page; this extension registers
+  // none, so anything with a tab is untrusted.
+  if (sender.tab) return false;
+  const origin = sender.origin || (sender.url ? originOf(sender.url) : "");
+  const own = originOf(ext.runtime.getURL(""));
+  if (origin && own && origin !== own) return false;
+  return true;
+}
+
+function originOf(raw) {
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "";
+  }
+}
+
+ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!isTrustedSender(sender)) {
+    console.warn("Lunefetch: ignored a message from an untrusted sender");
+    if (isFirefox) return Promise.reject(new Error("Untrusted sender"));
+    sendResponse({ error: "Untrusted sender" });
+    return false;
+  }
   if (isFirefox) return handleMessage(message);
   handleMessage(message).then(sendResponse, (error) => sendResponse({ error: error.message }));
   return true;
 });
 
+// Drop a stale confirmation draft so a batch tab opened much later cannot resend
+// links from an unrelated page, and so the list is not kept in storage forever.
+async function pruneBatchDraft() {
+  const draft = await storageGet("batchDraft");
+  if (!draft) return;
+  const createdAt = Number(draft.createdAt);
+  if (!Number.isFinite(createdAt) || Date.now() - createdAt > BATCH_DRAFT_TTL_MS) {
+    await storageRemove("batchDraft");
+  }
+}
+
 async function start() {
   await loadSettings();
+  await pruneBatchDraft();
+  await createContextMenus();
   await updateConnectionStatus();
 }
 
-export const startup = start().catch((error) => {
+export const startup = ready().catch((error) => {
   console.warn("Lunefetch: initialization failed:", error.message);
   throw error;
 });

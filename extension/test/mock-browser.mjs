@@ -37,6 +37,7 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
     badges: [],
     cancelled: [],
     contextCreated: [],
+    contextRemovedAll: 0,
     contextUpdated: [],
     erased: [],
     notifications: [],
@@ -45,8 +46,10 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
     titles: [],
   };
   const runtime = {
+    id: "mock-extension-id",
     lastError: null,
     onMessage: new MockEvent(),
+    onInstalled: new MockEvent(),
   };
 
   const invoke = (operation, callback) => {
@@ -78,8 +81,24 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
     },
     contextMenus: {
       onClicked: new MockEvent(),
-      create(options) { calls.contextCreated.push(options); },
-      async update(id, options) { calls.contextUpdated.push({ id, options }); },
+      create(options) {
+        if (calls.contextCreated.some((existing) => existing.id === options.id)) {
+          throw new Error(`Cannot create item with duplicate id ${options.id}`);
+        }
+        calls.contextCreated.push(options);
+      },
+      async update(id, options) {
+        if (!calls.contextCreated.some((existing) => existing.id === id)) {
+          throw new Error(`Cannot find menu item with id ${id}`);
+        }
+        calls.contextUpdated.push({ id, options });
+      },
+      removeAll(callback) {
+        calls.contextRemovedAll++;
+        calls.contextCreated.length = 0;
+        if (typeof callback === "function") callback();
+        return Promise.resolve();
+      },
     },
     notifications: {
       async create(options) { calls.notifications.push(options); return String(calls.notifications.length); },
@@ -99,6 +118,9 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
   api.storage.local.set = firefox
     ? async (values) => { Object.assign(storageData, structuredClone(values)); }
     : (values, callback) => { Object.assign(storageData, structuredClone(values)); callback(); };
+  api.storage.local.remove = firefox
+    ? async (key) => { delete storageData[key]; }
+    : (key, callback) => { delete storageData[key]; callback(); };
   api.scripting.executeScript = firefox
     ? async (options) => { calls.scripts.push(options); return [{ result: pageLinks }]; }
     : (options, callback) => { calls.scripts.push(options); callback([{ result: pageLinks }]); };
@@ -112,6 +134,14 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
 }
 
 export async function loadBackground(mock, firefox) {
+  const module = await importBackground(mock, firefox);
+  await module.startup;
+  return module;
+}
+
+// importBackground loads the worker WITHOUT awaiting initialization, so tests can
+// fire an event during startup the way a real service-worker wake-up does.
+export async function importBackground(mock, firefox) {
   if (firefox) {
     globalThis.browser = mock.api;
     delete globalThis.chrome;
@@ -119,9 +149,7 @@ export async function loadBackground(mock, firefox) {
     globalThis.chrome = mock.api;
     delete globalThis.browser;
   }
-  const module = await import(`../src/background.js?test=${Date.now()}-${Math.random()}`);
-  await module.startup;
-  return module;
+  return import(`../src/background.js?test=${Date.now()}-${Math.random()}`);
 }
 
 export function clearBrowserGlobals() {

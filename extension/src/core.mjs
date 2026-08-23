@@ -137,8 +137,18 @@ export function normalizeDownloadHint(item = {}) {
   const filename = String(item.filename || "").trim();
   const saveDir = String(item.saveDir || "").trim();
   if (filename && (filename.includes("/") || filename.includes("\\") || filename.includes("\0"))) return null;
-  if (saveDir.includes("\0")) return null;
+  if (saveDir && !isAbsoluteDir(saveDir)) return null;
   return { url, ...(filename ? { filename } : {}), ...(saveDir ? { save_dir: saveDir } : {}) };
+}
+
+// isAbsoluteDir mirrors the desktop API's requirement that a destination hint be
+// an absolute path. Rejecting it here surfaces a clear "invalid URL" outcome in
+// the UI instead of a silent HTTP 400 from the local API.
+export function isAbsoluteDir(value) {
+  const dir = String(value);
+  if (!dir || dir.includes("\0")) return false;
+  if (dir.startsWith("/")) return true;
+  return /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith("\\\\");
 }
 
 export function isDownloadURL(raw, extensions = DOWNLOAD_EXTENSIONS) {

@@ -14,6 +14,9 @@ Settings, site rules, and temporary bypass entries are stored in the browser's
 local extension storage. They are not synchronized by this extension and are
 not transmitted to the developer.
 
+Locally stored data is bounded: the recent-failure list keeps at most ten
+entries, and a “Download all” confirmation draft is discarded after ten minutes.
+
 Users can disable interception globally, limit interception by site, or remove
 the extension and native host. See `docs/browser-installation.md` for uninstall
 instructions.
