@@ -2,24 +2,31 @@
 
 ## Current Focus
 
-UI Architecture refactor before any new features.
-See [ARCHITECTURE.md](ARCHITECTURE.md) for design decisions.
+1.1.0 is released. The remaining work before the next release is manual Windows
+verification: row action menus, installer lifecycle, and DPI scaling at 100%,
+125%, and 150%. None of it has run on real Windows hardware; CI covers the build
+and the test suite only.
+
+See [CHANGELOG.md](CHANGELOG.md) for what shipped,
+[docs/ui-redesign-plan.md](docs/ui-redesign-plan.md) for the UI design record,
+and [ARCHITECTURE.md](ARCHITECTURE.md) for layering rules.
 
 ---
 
-## UI Refactor Phases
+## UI Refactor Phases (historical)
 
-These phases must be completed in order.
-Each phase must keep the project **buildable and runnable** before moving to the next.
+The original refactor sequence. Phases C, D, and E were later superseded by the
+1.1.0 redesign; the table gave way to a virtualized list and the inspector panel
+was replaced by inline row details.
 
 | Phase | Scope | Status |
 |-------|-------|--------|
-| A | Restructure `internal/ui/` into `components/`, `pages/`, `layout/`, `store/` — no UI changes | done |
-| B | Implement `Store` interface + concrete implementation — UI still looks the same, but reads from Store | done |
-| C | Sidebar — fixed 220px, filter by status | done |
-| D | Download Table — `widget.Table`, sortable columns, progress bar, realtime search | done |
-| E | Inspector — `widget.Accordion`, detail panel on row select | done |
-| F | Status Bar — global speed, active count, total count | done |
+| A | Restructure `internal/ui/` into `components/`, `pages/`, `layout/`, `store/` | done |
+| B | `Store` interface and implementation as the single UI/backend bridge | done |
+| C | Sidebar with status filters | superseded |
+| D | Download table with sortable columns | superseded |
+| E | Inspector detail panel on row select | superseded |
+| F | Status bar with global speed and counts | done |
 
 ---
 
@@ -156,7 +163,7 @@ Everything needed to use Lunefetch comfortably day-to-day.
 ### UI
 - [x] Sidebar filters and file-category navigation
 - [x] Download table with sortable columns and progress bars
-- [x] Selected-download detail panel
+- [x] Inline selected-download row details
 - [x] Status bar
 - [x] Empty state
 - [x] History page
@@ -165,13 +172,13 @@ Everything needed to use Lunefetch comfortably day-to-day.
 
 ## v1.1 — UX Improvements
 
-Quality-of-life features after v1.0 is solid.
+Released 2026-08-22. See [CHANGELOG.md](CHANGELOG.md) for the full entry.
 
 - [x] Context menu (row actions): Pause, Resume, Cancel, Open File, Open Folder, Copy URL, Remove
+- [x] Progress bar visualization in the download list
+- [x] Desktop notifications on completion (native on Windows and macOS, notify-send on Linux)
+- [x] Multi-select with batch operations (explicit selection mode)
 - [ ] Double-click row to open folder
-- [x] Progress bar visualization in table
-- [ ] Desktop notifications on completion
-- [ ] Multi-select (Ctrl+A, Shift+Click, Ctrl+Click) with batch operations
 - [ ] Queue priority (Highest / High / Normal / Low)
 - [ ] History view improvements
 
@@ -184,7 +191,7 @@ Features that differentiate Lunefetch from basic download managers.
 - [ ] Proxy per download (override global)
 - [ ] Clipboard monitor — detect URL copy, show "Download?" popup
 - [ ] Export / Import (JSON, TXT)
-- [ ] Theme manager (Dark, Light, and presets)
+- [ ] Theme manager (Dark, Light, and presets; desktop redesign is currently dark-only)
 - [ ] Tags — label downloads, search by `tag:name`
 - [ ] Favorites — pin important downloads
 
@@ -216,5 +223,5 @@ No timeline. Considered only after v1.2 is done.
 | Event-driven refresh | Polling 500ms is sufficient | >500 concurrent downloads |
 | Repository layer | Not needed yet | Adding a second storage backend |
 | Resizable sidebar | Fixed 220px is enough | User feedback says otherwise |
-| Theme system | Deferred to v1.2 | Layout is finalized |
+| Theme system | Desktop dark theme is implemented; light/preset modes remain deferred | Product requirements call for additional modes |
 | `components/` subfolders | Flat for now | Any component reaches 4+ files |

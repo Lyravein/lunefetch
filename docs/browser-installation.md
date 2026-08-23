@@ -61,3 +61,34 @@ not bundle or silently install extensions. Firefox releases are distributed
 through [Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/lunefetch/),
 and Chromium releases are distributed through the Chrome Web Store. Development
 archives can still be built from source and loaded temporarily.
+
+The Firefox extension requires Firefox 142 or newer, which is the first version
+that supports the declared `data_collection_permissions`. Firefox for Android is
+not supported because it does not provide native messaging.
+
+## Application Data Locations
+
+The native host reads the local API token written by the desktop application, so
+both must agree on where per-user files live.
+
+| | Linux | Windows |
+|---|---|---|
+| Config, API token | `~/.config/lunefetch` | `%AppData%\lunefetch` |
+| Database, instance lock | `$XDG_DATA_HOME` or `~/.local/share/lunefetch` | `%LocalAppData%\lunefetch` |
+
+## Troubleshooting
+
+If the popup reports that Lunefetch is unavailable:
+
+1. Confirm the desktop application is running. It closes to the system tray by
+   default, so check the tray before relaunching.
+2. Confirm the native host is registered. On Linux the manifest must exist in the
+   directory listed above for your browser; on Windows the `HKCU` entry must
+   point at an existing manifest file.
+3. Restart the browser after installing or reinstalling the native host. Browsers
+   read native messaging manifests at startup.
+4. Use **Check connection** in the extension popup for a specific diagnostic.
+
+If a second Lunefetch window refuses to open, that is intended: only one instance
+runs per user, because two processes would share one database and the same
+temporary files. Use the tray icon to reopen the existing window.

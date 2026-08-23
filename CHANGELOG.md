@@ -1,5 +1,92 @@
 # Lunefetch Changelog
 
+Released versions track the `VERSION` file. Entries below `1.1.0` use an older
+internal phase numbering and are kept for historical reference.
+
+## [1.1.0] - 2026-08-22
+
+### Desktop UI redesign
+- Rebuilt the shell: 260px sidebar with status and category routes, content
+  header with greeting/search/`New Download`, live summary cards, and a status
+  bar carrying overall speed plus a persisted concurrency selector.
+- Replaced `widget.Table` with a virtualized `widget.List` and a hand-written row
+  renderer. This fixes the reported Windows bug where the trailing action button
+  could not be clicked, so downloads could not be removed.
+- Rows now show a file-type icon, filename, size and percentage metadata, a
+  compact progress bar, status, speed, and ETA without clipping.
+- Sidebar routes live in one scroll area with a pinned footer, so every filter
+  and category stays reachable at the minimum window size.
+- Canonical categories are now `Compressed`, `Documents`, `Media`, `Programs`,
+  and `Other`, with an idempotent migration from the old names. Files already in
+  legacy category directories are left where they are.
+- Dark-only moonlit theme; the window keeps saved geometry with a 1000x640 floor.
+- Restored the documented `Ctrl+C` (copy selected URL) and `Ctrl+P` (pause all)
+  shortcuts, which were listed in the README but never wired up.
+- Queued rows can be moved one step up or down from the row action menu, exposing
+  the queue-position storage layer that previously had no UI.
+
+### Download integrity
+- Resume progress is reconciled against the real `.part` file. A deleted or
+  truncated temp file now re-downloads instead of being published as a complete,
+  zero-filled file.
+- The final size is verified and the file is `fsync`ed before it is published.
+- Pausing no longer loses progress: cancellation waits for in-flight chunk
+  workers, flushes their progress, and reports `context.Canceled`.
+- `Done()` is closed on every exit path, including early failures, and is safe to
+  read concurrently with `Start`.
+- Retry backoff honours `retry_backoff_s` and is capped at two minutes; it
+  previously ignored the setting and could sleep for days.
+- Leftover `.part` files are removed when history entries are purged.
+
+### Security
+- Destination hints from the browser extension are confined to the configured
+  download directory. Previously any absolute path was accepted, which allowed
+  writing files outside it.
+- The destination policy now also blocks CGNAT/Tailscale `100.64.0.0/10` and
+  other reserved ranges when local access is disabled.
+- Temporary `.part` files are created with mode `0600`.
+
+### Windows
+- Config and state use `%AppData%` and `%LocalAppData%`. They previously derived
+  from `$HOME`, which is normally unset on Windows and produced paths relative to
+  the working directory.
+- Desktop notifications use the native mechanism; they never appeared before
+  because delivery went only through `notify-send`.
+- Open File and Open Folder use `explorer.exe` with normalized separators.
+
+### Reliability
+- A second instance is refused with an explanatory window instead of sharing the
+  database and temp files.
+- Startup failures (config, database, API token, single instance) now show a
+  window; as a GUI binary these messages were previously invisible.
+- SQLite `foreign_keys` and `busy_timeout` are set in the DSN and verified at
+  open, so cascade deletes cannot silently stop working.
+- Config writes are atomic, so a crash mid-write cannot leave an unparseable
+  config that blocks startup.
+- Queue ordering is consistent between execution and display, and queue moves are
+  clamped and scoped to live queued rows.
+- App, window, and tray icons are embedded. The tray icon was blank because the
+  installer did not ship `lunefetch.ico` and Go cannot decode the ICO format.
+
+### Browser extension
+- Fixed MV3 state loss: listeners now wait for initialization, so a download can
+  no longer be intercepted using default settings after the user disabled
+  interception.
+- `runtime.onMessage` validates the sender, so only the extension's own pages can
+  queue downloads or change settings.
+- Context menus are recreated cleanly when the service worker restarts.
+- Relative destination hints are rejected before handoff, batch drafts expire
+  after ten minutes, and collected links are filtered and capped.
+- Raised the Firefox minimum to 142, matching the declared data-collection
+  permissions.
+
+### Housekeeping
+- Removed the unused Bubble Tea TUI and its dependencies.
+- CI now runs the full race-enabled test suite and `go vet` on both Linux and
+  Windows, plus installer lifecycle checks and a dedicated extension job.
+
+---
+
 ## [4.0.0] - Phase 5 Complete (2026-08-18)
 
 ### 🎯 Summary
