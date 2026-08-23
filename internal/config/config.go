@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/lyravein/lunefetch/internal/userpath"
 )
 
 type ChunkRules struct {
@@ -52,7 +54,7 @@ func (c *Config) SetPath(p string) {
 
 func Default() *Config {
 	return &Config{
-		DownloadDir:    filepath.Join(os.Getenv("HOME"), "Downloads"),
+		DownloadDir:    userpath.Downloads(),
 		MaxRetries:     3,
 		RetryBackoffS:  1,
 		MinFreeSpaceMB: 100,
@@ -149,15 +151,40 @@ func (c *Config) Save() error {
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	if err := os.WriteFile(configFile, data, 0600); err != nil {
+	// Write to a temp file in the same directory and rename over the target so a
+	// crash mid-write cannot leave a truncated, unparseable config behind —
+	// Load() treats a parse error as fatal.
+	tmp, err := os.CreateTemp(filepath.Dir(configFile), ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+
+	if err := tmp.Chmod(0600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("secure temp config: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return fmt.Errorf("write config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpName, configFile); err != nil {
+		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil
 }
 
 // DefaultPath mengembalikan lokasi config default.
 func DefaultPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".config", "lunefetch", "config.yaml")
+	return filepath.Join(userpath.Config(), "config.yaml")
 }
 
 func Load() (*Config, error) {
@@ -190,7 +217,7 @@ func Load() (*Config, error) {
 		return cfg, fmt.Errorf("parse config: %w", err)
 	}
 	if strings.HasPrefix(cfg.DownloadDir, "~/") {
-		cfg.DownloadDir = filepath.Join(os.Getenv("HOME"), strings.TrimPrefix(cfg.DownloadDir, "~/"))
+		cfg.DownloadDir = filepath.Join(userpath.Home(), strings.TrimPrefix(cfg.DownloadDir, "~/"))
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, fmt.Errorf("validate config: %w", err)

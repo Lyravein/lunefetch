@@ -61,6 +61,7 @@ type Downloader struct {
 	chunks    []Chunk
 	numChunks int
 	retries   int
+	backoff   time.Duration
 
 	file       *os.File
 	progress   DownloadProgress
@@ -113,7 +114,19 @@ func NewDownloader(url, filePath string, totalSize int64, chunks []Chunk, numChu
 		done:     make(chan struct{}),
 		speedBuf: make([]int64, 0, 10),
 		client:   newHTTPClient("", 0, false),
+		backoff:  time.Second,
 	}
+}
+
+// SetRetryBackoff sets the base delay before the first retry. Later attempts
+// double it, capped at maxRetryBackoff. Values <= 0 keep the 1s default.
+func (d *Downloader) SetRetryBackoff(base time.Duration) {
+	if base <= 0 {
+		return
+	}
+	d.mu.Lock()
+	d.backoff = base
+	d.mu.Unlock()
 }
 
 // SetProgressCallback registers a callback invoked whenever a chunk's progress
@@ -187,6 +200,23 @@ type addressPolicy struct {
 	proxyHost  string
 }
 
+// reservedPrefixes are ranges netip's IsPrivate/IsLoopback/IsLinkLocal helpers
+// do not cover but that are still not valid public download destinations.
+// 100.64.0.0/10 matters in practice: it is CGNAT space and also what Tailscale
+// assigns to tailnet peers, so omitting it left the local network reachable.
+var reservedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),   // RFC 6598 CGNAT / Tailscale
+	netip.MustParsePrefix("192.0.0.0/24"),    // RFC 6890 IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),    // RFC 5737 documentation
+	netip.MustParsePrefix("198.18.0.0/15"),   // RFC 2544 benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"), // RFC 5737 documentation
+	netip.MustParsePrefix("203.0.113.0/24"),  // RFC 5737 documentation
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64, can map to private IPv4
+	netip.MustParsePrefix("100::/64"),        // discard-only
+	netip.MustParsePrefix("2001:db8::/32"),   // documentation
+}
+
 func (p addressPolicy) blocked(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	for _, meta := range metadataAddrs {
@@ -200,8 +230,17 @@ func (p addressPolicy) blocked(addr netip.Addr) bool {
 	if p.allowLocal {
 		return false
 	}
-	return addr.IsLoopback() || addr.IsPrivate() ||
-		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast()
+	if addr.IsLoopback() || addr.IsPrivate() ||
+		addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
+		addr.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, prefix := range reservedPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p addressPolicy) exempt(host string) bool {
@@ -370,11 +409,19 @@ func (d *Downloader) Start(ctx context.Context) error {
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{}) // reset done channel for each Start call
 	d.mu.Lock()
 	d.cancel = cancel
-	d.done = make(chan struct{}) // reset done channel for each Start call
+	d.done = done
 	d.mu.Unlock()
 	defer cancel()
+
+	// Every return path must close done exactly once, otherwise callers waiting
+	// on Done() block forever. sync.Once guards the paths that also need to
+	// close it early (the unknown-size branch).
+	var closeOnce sync.Once
+	closeDone := func() { closeOnce.Do(func() { close(done) }) }
+	defer closeDone()
 
 	// Check disk space before creating file
 	if err := DiskSpaceAvailable(filepath.Dir(d.filePath), d.totalSize); err != nil {
@@ -382,7 +429,7 @@ func (d *Downloader) Start(ctx context.Context) error {
 	}
 
 	var err error
-	d.file, err = os.OpenFile(d.filePath, os.O_CREATE|os.O_WRONLY, 0644)
+	d.file, err = os.OpenFile(d.filePath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
@@ -392,11 +439,21 @@ func (d *Downloader) Start(ctx context.Context) error {
 	// sequential request and discover the size while writing the response.
 	if d.totalSize <= 0 && len(d.chunks) == 1 && d.chunks[0].End < 0 {
 		err := d.startUnknownSize(ctx)
-		close(d.done)
+		closeDone()
 		d.flushProgress()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if err != nil {
+			return err
+		}
+		return d.syncFile()
+	}
+
+	// Persisted chunk progress is a claim about bytes on disk. If the part file
+	// was removed or truncated behind our back, trusting it would skip the
+	// missing ranges and publish a zero-filled file as a complete download.
+	if err := d.reconcileDiskProgress(); err != nil {
 		return err
 	}
 
@@ -415,10 +472,17 @@ func (d *Downloader) Start(ctx context.Context) error {
 
 	go d.trackSpeed(ctx, &lastDownloaded)
 
+	// cancelled records that the spawn loop stopped early. Workers already
+	// running still have to be waited for: returning here while a worker is
+	// mid-WriteAt would let the deferred file Close race the write, and would
+	// skip the flushProgress that keeps a pause resumable.
+	cancelled := false
+spawn:
 	for i := range d.chunks {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			cancelled = true
+			break spawn
 		case sem <- struct{}{}:
 		}
 
@@ -437,7 +501,7 @@ func (d *Downloader) Start(ctx context.Context) error {
 	}
 
 	wg.Wait()
-	close(d.done)
+	closeDone()
 
 	// Flush every chunk's current progress to persistent storage. trackSpeed
 	// only persists once per second, so a pause/cancel that lands between ticks
@@ -449,6 +513,9 @@ func (d *Downloader) Start(ctx context.Context) error {
 	// callers can distinguish an intentional stop from a real failure.
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if cancelled {
+		return context.Canceled
 	}
 
 	d.mu.RLock()
@@ -465,6 +532,85 @@ func (d *Downloader) Start(ctx context.Context) error {
 		return fmt.Errorf("some chunks failed")
 	}
 
+	// Persisted chunk progress alone is not proof the bytes are on disk: a
+	// missing or truncated .part file would otherwise be published as a
+	// complete download. Verify the real file, then flush it to storage.
+	if err := d.verifyOnDisk(); err != nil {
+		return err
+	}
+	return d.syncFile()
+}
+
+// reconcileDiskProgress drops resume progress that the part file cannot back.
+// A chunk is only credited with bytes that actually exist on disk, so a deleted
+// or truncated part file causes those ranges to be downloaded again instead of
+// being silently treated as complete.
+func (d *Downloader) reconcileDiskProgress() error {
+	info, err := d.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat part file: %w", err)
+	}
+	onDisk := info.Size()
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var total int64
+	for i := range d.progress.Chunks {
+		cp := &d.progress.Chunks[i]
+		if cp.DownloadedSize <= 0 {
+			continue
+		}
+		start := d.chunks[i].Start
+		available := onDisk - start
+		if available < 0 {
+			available = 0
+		}
+		if cp.DownloadedSize > available {
+			cp.DownloadedSize = available
+			if cp.Status == "completed" {
+				cp.Status = "pending"
+			}
+		}
+		total += cp.DownloadedSize
+	}
+	d.progress.DownloadedSize = total
+	return nil
+}
+
+// verifyOnDisk asserts the part file really holds the expected byte count and
+// that the chunk bookkeeping agrees with the declared total size.
+func (d *Downloader) verifyOnDisk() error {
+	d.mu.RLock()
+	total := d.totalSize
+	var chunkSum int64
+	for _, cp := range d.progress.Chunks {
+		chunkSum += cp.DownloadedSize
+	}
+	d.mu.RUnlock()
+
+	if total > 0 && chunkSum != total {
+		return fmt.Errorf("incomplete download: %d of %d bytes accounted for", chunkSum, total)
+	}
+	info, err := d.file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat part file: %w", err)
+	}
+	if total > 0 && info.Size() != total {
+		return fmt.Errorf("size mismatch: expected %d, got %d", total, info.Size())
+	}
+	return nil
+}
+
+// syncFile flushes written bytes to storage before the caller publishes the
+// file. Without it a crash right after the record is marked completed can leave
+// a truncated or zero-filled file in place.
+func (d *Downloader) syncFile() error {
+	if d.file == nil {
+		return nil
+	}
+	if err := d.file.Sync(); err != nil {
+		return fmt.Errorf("sync file: %w", err)
+	}
 	return nil
 }
 
@@ -577,7 +723,7 @@ func (d *Downloader) downloadChunkWithRetry(ctx context.Context, ch Chunk) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			case <-time.After(d.backoffFor(attempt)):
 			}
 		}
 	}
@@ -595,6 +741,27 @@ func (d *Downloader) downloadChunkWithRetry(ctx context.Context, ch Chunk) {
 	done := d.progress.Chunks[ch.Index].DownloadedSize
 	d.mu.Unlock()
 	d.emitProgress(ch.Index, done, "failed")
+}
+
+// maxRetryBackoff caps exponential growth. Without a cap, max_retries near its
+// configured limit of 20 would make the last sleep several days long.
+const maxRetryBackoff = 2 * time.Minute
+
+// backoffFor returns the delay before the given retry attempt, doubling from the
+// configured base delay up to maxRetryBackoff.
+func (d *Downloader) backoffFor(attempt int) time.Duration {
+	base := d.backoff
+	if base <= 0 {
+		base = time.Second
+	}
+	delay := base
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+		if delay >= maxRetryBackoff {
+			return maxRetryBackoff
+		}
+	}
+	return delay
 }
 
 func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
@@ -839,7 +1006,11 @@ func (d *Downloader) Cancel() {
 	}
 }
 
+// Done is closed when the current Start call finishes, including its error and
+// cancellation paths.
 func (d *Downloader) Done() <-chan struct{} {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	return d.done
 }
 
@@ -980,6 +1151,33 @@ func SafeDownloadPath(root, filename string) (string, error) {
 	return dst, nil
 }
 
+// SafeSaveDir validates a caller-supplied destination directory against the
+// configured download root. Untrusted callers (the browser extension via the
+// local API) may only redirect downloads *within* that root; an arbitrary
+// absolute path would otherwise let them create files anywhere the user can
+// write, for example an autostart entry.
+func SafeSaveDir(root, dir string) (string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve download directory: %w", err)
+	}
+	if strings.TrimSpace(dir) == "" {
+		return absRoot, nil
+	}
+	if strings.ContainsRune(dir, '\x00') {
+		return "", fmt.Errorf("destination directory contains an invalid character")
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve destination directory: %w", err)
+	}
+	rel, err := filepath.Rel(absRoot, absDir)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("destination directory escapes the download directory")
+	}
+	return absDir, nil
+}
+
 func VerifyDownload(filePath string, expectedSize int64) error {
 	info, err := os.Stat(filePath)
 	if err != nil {
@@ -1099,8 +1297,14 @@ func CalculateChunks(fileSize int64, numChunks int) []Chunk {
 		}}
 	}
 
-	if numChunks > int(fileSize) {
+	// Compare in int64: int is 32-bit on some builds, so int(fileSize) would
+	// truncate a >2 GiB size and could yield numChunks = 0, then a divide by
+	// zero below.
+	if int64(numChunks) > fileSize {
 		numChunks = int(fileSize)
+	}
+	if numChunks < 1 {
+		numChunks = 1
 	}
 
 	chunks := make([]Chunk, 0, numChunks)

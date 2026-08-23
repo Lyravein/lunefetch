@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lyravein/lunefetch/internal/userpath"
 )
 
 const apiURL = "http://127.0.0.1:7474/download"
@@ -133,7 +135,7 @@ func downloadPayload(in inMessage) ([]byte, error) {
 
 // sendToApp forwards a health check or download request to the local API.
 func sendToApp(in inMessage) outMessage {
-	tokenData, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".config", "lunefetch", "api-token"))
+	tokenData, err := os.ReadFile(filepath.Join(userpath.Config(), "api-token"))
 	if err != nil {
 		return failure(outcomeAppUnavailable, "Lunefetch is not installed or has not been started")
 	}

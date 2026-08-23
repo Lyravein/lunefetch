@@ -1,5 +1,5 @@
 // Package filecat maps file extensions to download categories.
-// Category names are used as subfolder names under the base DownloadDir.
+// Category names identify file-type groups. They do not rename existing files.
 package filecat
 
 import "strings"
@@ -8,35 +8,33 @@ import "strings"
 type Category string
 
 const (
-	Video    Category = "Videos"
-	Audio    Category = "Music"
-	Image    Category = "Images"
-	Document Category = "Documents"
-	Archive  Category = "Archives"
-	Program  Category = "Programs"
-	Other    Category = "Other"
+	Media      Category = "Media"
+	Document   Category = "Documents"
+	Compressed Category = "Compressed"
+	Program    Category = "Programs"
+	Other      Category = "Other"
 )
 
 // All returns all known categories in display order.
 func All() []Category {
-	return []Category{Video, Audio, Image, Document, Archive, Program, Other}
+	return []Category{Compressed, Document, Media, Program, Other}
 }
 
 var extMap = map[string]Category{
-	// Video
-	".mp4": Video, ".mkv": Video, ".avi": Video, ".mov": Video,
-	".wmv": Video, ".flv": Video, ".webm": Video, ".m4v": Video,
-	".mpg": Video, ".mpeg": Video, ".3gp": Video, ".ts": Video,
+	// Media: video
+	".mp4": Media, ".mkv": Media, ".avi": Media, ".mov": Media,
+	".wmv": Media, ".flv": Media, ".webm": Media, ".m4v": Media,
+	".mpg": Media, ".mpeg": Media, ".3gp": Media, ".ts": Media,
 
 	// Audio
-	".mp3": Audio, ".flac": Audio, ".aac": Audio, ".ogg": Audio,
-	".wav": Audio, ".wma": Audio, ".m4a": Audio, ".opus": Audio,
-	".aiff": Audio, ".alac": Audio,
+	".mp3": Media, ".flac": Media, ".aac": Media, ".ogg": Media,
+	".wav": Media, ".wma": Media, ".m4a": Media, ".opus": Media,
+	".aiff": Media, ".alac": Media,
 
 	// Image
-	".jpg": Image, ".jpeg": Image, ".png": Image, ".gif": Image,
-	".bmp": Image, ".webp": Image, ".tiff": Image, ".tif": Image,
-	".svg": Image, ".ico": Image, ".heic": Image, ".raw": Image,
+	".jpg": Media, ".jpeg": Media, ".png": Media, ".gif": Media,
+	".bmp": Media, ".webp": Media, ".tiff": Media, ".tif": Media,
+	".svg": Media, ".ico": Media, ".heic": Media, ".raw": Media,
 
 	// Document
 	".pdf": Document, ".doc": Document, ".docx": Document,
@@ -45,10 +43,10 @@ var extMap = map[string]Category{
 	".txt": Document, ".md": Document, ".epub": Document, ".mobi": Document,
 	".csv": Document,
 
-	// Archive
-	".zip": Archive, ".rar": Archive, ".7z": Archive, ".tar": Archive,
-	".gz": Archive, ".bz2": Archive, ".xz": Archive, ".tgz": Archive,
-	".tbz2": Archive, ".iso": Archive, ".dmg": Archive,
+	// Compressed
+	".zip": Compressed, ".rar": Compressed, ".7z": Compressed, ".tar": Compressed,
+	".gz": Compressed, ".bz2": Compressed, ".xz": Compressed, ".tgz": Compressed,
+	".tbz2": Compressed, ".iso": Compressed, ".dmg": Compressed,
 
 	// Program / installer
 	".exe": Program, ".msi": Program, ".deb": Program, ".rpm": Program,

@@ -102,6 +102,7 @@ func (m *Manager) EnqueueScheduled(id int64) error {
 	if len(m.active) < m.maxConcurrent {
 		m.active[id] = struct{}{}
 		m.state.UpdateDownloadStatus(id, "downloading") //nolint:errcheck
+		m.state.SetQueuePosition(id, nil)               //nolint:errcheck
 		go m.startFn(id)
 		return nil
 	}
@@ -148,7 +149,8 @@ func (m *Manager) enqueue(id int64) error {
 		return nil
 	}
 	row := m.state.DB().QueryRow(
-		`SELECT COALESCE(MAX(queue_position), 0) FROM downloads WHERE status = 'queued'`,
+		`SELECT COALESCE(MAX(queue_position), 0) FROM downloads
+		  WHERE status = 'queued' AND deleted_at IS NULL`,
 	)
 	var maxPos int64
 	if err := row.Scan(&maxPos); err != nil {
@@ -161,14 +163,23 @@ func (m *Manager) enqueue(id int64) error {
 	return m.state.UpdateDownloadStatus(id, "queued")
 }
 
-// drainQueue starts the next queued download if a slot is available.
+// drainQueue starts queued downloads while slots are available.
 // Caller must hold m.mu.
+//
+// The loop is bounded: NextInQueue can keep returning the same row if its
+// status stays "queued" while the id is already active, and an unbounded retry
+// would spin forever holding m.mu.
 func (m *Manager) drainQueue() {
+	seen := make(map[int64]struct{})
 	for len(m.active) < m.maxConcurrent {
 		next, err := m.state.NextInQueue()
 		if err != nil || next == nil {
 			return
 		}
+		if _, repeated := seen[next.ID]; repeated {
+			return
+		}
+		seen[next.ID] = struct{}{}
 		if _, exists := m.active[next.ID]; exists {
 			m.state.SetQueuePosition(next.ID, nil) //nolint:errcheck
 			continue

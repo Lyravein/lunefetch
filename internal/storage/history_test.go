@@ -8,6 +8,63 @@ import (
 	"github.com/lyravein/lunefetch/internal/storage"
 )
 
+func TestCategoryMigrationIsIdempotentAndPreservesRecords(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	sm, err := storage.NewStateManager(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaID, err := sm.CreateDownload("http://example.com/video.mp4", "video.mp4", "/legacy/Videos", "Videos", 10, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressedID, err := sm.CreateDownload("http://example.com/archive.zip", "archive.zip", "/legacy/Archives", "Archives", 20, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.DeleteDownload(compressedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sm, err = storage.NewStateManager(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	media, err := sm.GetDownload(mediaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed, err := sm.GetDownload(compressedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media.Category != "Media" || media.SaveDir != "/legacy/Videos" || media.TotalSize != 10 {
+		t.Fatalf("active migration changed record: %+v", media)
+	}
+	if compressed.Category != "Compressed" || !compressed.DeletedAt.Valid || compressed.SaveDir != "/legacy/Archives" {
+		t.Fatalf("deleted migration changed record: %+v", compressed)
+	}
+
+	if err := sm.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sm, err = storage.NewStateManager(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sm.Close() }()
+	media, err = sm.GetDownload(mediaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media.Category != "Media" {
+		t.Fatalf("second migration changed canonical value to %q", media.Category)
+	}
+}
+
 func newSM(t *testing.T) *storage.StateManager {
 	t.Helper()
 	sm, err := storage.NewStateManager(filepath.Join(t.TempDir(), "test.db"))
@@ -284,7 +341,7 @@ func TestFindByURLIgnoresDeleted(t *testing.T) {
 
 func TestFindByURLReturnsFullRecord(t *testing.T) {
 	sm := newSM(t)
-	id, err := sm.CreateDownload("http://example.com/full.bin", "full.bin", "/tmp/downloads", "Archives", 2048, true, 4)
+	id, err := sm.CreateDownload("http://example.com/full.bin", "full.bin", "/tmp/downloads", "Compressed", 2048, true, 4)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -299,7 +356,7 @@ func TestFindByURLReturnsFullRecord(t *testing.T) {
 	if rec == nil {
 		t.Fatal("FindByURL returned nil for active record")
 	}
-	if rec.ID != id || rec.SaveDir != "/tmp/downloads" || rec.Category != "Archives" || rec.SpeedLimit != 123456 {
+	if rec.ID != id || rec.SaveDir != "/tmp/downloads" || rec.Category != "Compressed" || rec.SpeedLimit != 123456 {
 		t.Fatalf("unexpected record: %+v", rec)
 	}
 }

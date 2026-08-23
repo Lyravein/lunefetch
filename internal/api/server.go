@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/lyravein/lunefetch/internal/userpath"
 )
 
 const DefaultAddr = "127.0.0.1:7474"
@@ -143,7 +145,7 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 
 // TokenPath is shared with the native host as a user-private bearer token.
 func TokenPath() string {
-	return filepath.Join(os.Getenv("HOME"), ".config", "lunefetch", "api-token")
+	return filepath.Join(userpath.Config(), "api-token")
 }
 
 // LoadOrCreateToken returns the local API token, creating it with mode 0600.

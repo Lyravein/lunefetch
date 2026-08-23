@@ -15,7 +15,7 @@ type DownloadRecord struct {
 	URL            string
 	Filename       string
 	SaveDir        string // direktori tujuan download
-	Category       string // kategori otomatis: Videos, Music, Images, dll
+	Category       string // canonical values: Media, Compressed, Documents, Programs, Other
 	SpeedLimit     int64  // bytes/sec, 0 = unlimited
 	TotalSize      int64
 	DownloadedSize int64
@@ -52,15 +52,25 @@ func NewStateManager(dbPath string) (*StateManager, error) {
 		return nil, fmt.Errorf("create db dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	// Pragmas belong in the DSN so every connection gets them. Setting
+	// foreign_keys with a bare Exec only configured whichever connection
+	// happened to run it, which silently disabled cascade deletes if the pool
+	// ever replaced that connection. busy_timeout keeps a concurrent writer
+	// waiting instead of failing immediately with SQLITE_BUSY.
+	//
+	// WAL is deliberately not enabled: it creates -wal/-shm sidecars that the
+	// driver makes world-readable, which would leak database contents that the
+	// 0600 main file is meant to protect.
+	dsn := dbPath + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+	if err := verifyPragmas(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, err
 	}
 
 	sm := &StateManager{db: db}
@@ -74,6 +84,26 @@ func NewStateManager(dbPath string) (*StateManager, error) {
 	}
 
 	return sm, nil
+}
+
+// verifyPragmas confirms the DSN pragmas actually took effect. Silently running
+// without foreign keys would break chunk cascade deletes.
+func verifyPragmas(db *sql.DB) error {
+	var foreignKeys int
+	if err := db.QueryRow(`PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("read foreign_keys pragma: %w", err)
+	}
+	if foreignKeys != 1 {
+		return fmt.Errorf("foreign key enforcement is disabled")
+	}
+	var busyTimeout int
+	if err := db.QueryRow(`PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		return fmt.Errorf("read busy_timeout pragma: %w", err)
+	}
+	if busyTimeout <= 0 {
+		return fmt.Errorf("busy_timeout is not set")
+	}
+	return nil
 }
 
 func (sm *StateManager) migrate() error {
@@ -137,8 +167,23 @@ func (sm *StateManager) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_downloads_deleted_at ON downloads(deleted_at);
 	`
 
-	_, err := sm.db.Exec(schema)
-	return err
+	if _, err := sm.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Normalize persisted names without touching files or other record fields.
+	tx, err := sm.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.Exec(`UPDATE downloads SET category = 'Media' WHERE category IN ('Videos', 'Music', 'Images')`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE downloads SET category = 'Compressed' WHERE category = 'Archives'`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (sm *StateManager) CreateDownload(url, filename, saveDir, category string, totalSize int64, supportsRanges bool, numChunks int) (int64, error) {
@@ -381,7 +426,7 @@ func (sm *StateManager) NextInQueue() (*DownloadRecord, error) {
 		        etag, last_modified, queue_position, scheduled_at, created_at, updated_at, deleted_at
 		 FROM downloads
 		 WHERE status = 'queued' AND deleted_at IS NULL
-		 ORDER BY queue_position ASC
+		 ORDER BY queue_position ASC NULLS LAST, created_at ASC
 		 LIMIT 1`,
 	)
 	rec := &DownloadRecord{}
@@ -440,32 +485,61 @@ func (sm *StateManager) ShiftQueuePositions() error {
 }
 
 // MoveQueuePosition moves a download up (-1) or down (+1) in the queue.
+// It is a no-op when the download is not an active queue member.
 func (sm *StateManager) MoveQueuePosition(id int64, delta int) error {
+	if delta == 0 {
+		return nil
+	}
 	if err := sm.ShiftQueuePositions(); err != nil {
 		return err
 	}
 
-	row := sm.db.QueryRow(`SELECT queue_position FROM downloads WHERE id = ?`, id)
+	// Scope the lookup to live queued rows: a soft-deleted record can still
+	// carry a queue_position, and swapping against it would corrupt the order.
+	row := sm.db.QueryRow(
+		`SELECT queue_position FROM downloads
+		  WHERE id = ? AND status = 'queued' AND deleted_at IS NULL`, id,
+	)
 	var pos sql.NullInt64
-	if err := row.Scan(&pos); err != nil || !pos.Valid {
-		return nil // not in queue, nothing to do
+	if err := row.Scan(&pos); err != nil {
+		if err == sql.ErrNoRows {
+			return nil // not in queue, nothing to do
+		}
+		return fmt.Errorf("read queue position: %w", err)
+	}
+	if !pos.Valid {
+		return nil
 	}
 
+	// Clamp to the compacted range so a move past the end cannot leave a gap.
+	var queueLen int64
+	if err := sm.db.QueryRow(
+		`SELECT COUNT(*) FROM downloads WHERE status = 'queued' AND deleted_at IS NULL`,
+	).Scan(&queueLen); err != nil {
+		return fmt.Errorf("count queue: %w", err)
+	}
 	newPos := pos.Int64 + int64(delta)
 	if newPos < 1 {
 		newPos = 1
 	}
+	if newPos > queueLen {
+		newPos = queueLen
+	}
+	if newPos == pos.Int64 {
+		return nil
+	}
 
-	// Swap with whoever is at newPos.
 	tx, err := sm.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
+	// Swap with whoever currently occupies newPos.
 	if _, err := tx.Exec(
-		`UPDATE downloads SET queue_position = queue_position - ? WHERE queue_position = ? AND id != ?`,
-		delta, newPos, id,
+		`UPDATE downloads SET queue_position = ?
+		  WHERE queue_position = ? AND id != ? AND status = 'queued' AND deleted_at IS NULL`,
+		pos.Int64, newPos, id,
 	); err != nil {
 		return err
 	}
@@ -570,7 +644,7 @@ func (sm *StateManager) ListDownloads() ([]DownloadRecord, error) {
 		 WHERE deleted_at IS NULL
 		 ORDER BY
 		   CASE WHEN status = 'queued' THEN 1 ELSE 0 END ASC,
-		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END DESC NULLS LAST,
+		   CASE WHEN status = 'queued' THEN queue_position ELSE NULL END ASC NULLS LAST,
 		   created_at ASC`,
 	)
 	if err != nil {
