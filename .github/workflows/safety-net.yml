@@ -1,0 +1,77 @@
+name: Cross-platform safety net
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Fyne build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev
+      - name: Vet
+        run: go vet ./...
+      - name: Run all tests
+        run: go test ./... -race -count=1
+      - name: Verify Linux installer lifecycle
+        run: bash scripts/test-install-linux.sh
+
+  windows:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Windows build dependencies
+        shell: pwsh
+        run: choco install mingw innosetup --no-progress --yes
+      - name: Vet
+        run: go vet ./...
+      # The whole suite runs here, not just internal/ui: the single-instance
+      # lock, user paths, and notifier all have platform-specific code paths.
+      - name: Run all tests
+        run: go test ./... -race -count=1
+      - name: Build Windows package
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -OutputDir "$env:RUNNER_TEMP\lunefetch-dist"
+      - name: Verify installer lifecycle
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "$env:RUNNER_TEMP\lunefetch-dist" -Filter 'Lunefetch-Setup-*.exe' -Recurse | Select-Object -First 1
+          if (-not $installer) { throw 'Windows installer was not produced' }
+          ./scripts/test-windows-package.ps1 -Installer $installer.FullName
+
+  extension:
+    name: Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install extension dev dependencies
+        working-directory: extension
+        run: npm ci
+      - name: Syntax check
+        working-directory: extension
+        run: npm run check
+      - name: Run extension tests
+        working-directory: extension
+        run: npm test
+      - name: Build packages
+        working-directory: extension
+        run: ./build.sh
+      - name: Lint Firefox package
+        working-directory: extension
+        run: npm run lint:firefox
