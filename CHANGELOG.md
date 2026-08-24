@@ -1,9 +1,10 @@
 # Lunefetch Changelog
 
-Released versions track the `VERSION` file. Entries below `1.1.0` use an older
-internal phase numbering and are kept for historical reference.
+Released versions track the `VERSION` file. Sections labelled `Phase N` predate
+that convention: they are development milestones, not releases, and are kept for
+historical reference.
 
-## [1.1.0] - 2026-08-22
+## [1.1.0] - 2026-08-24
 
 ### Desktop UI redesign
 - Rebuilt the shell: 260px sidebar with status and category routes, content
@@ -87,7 +88,7 @@ internal phase numbering and are kept for historical reference.
 
 ---
 
-## [4.0.0] - Phase 5 Complete (2026-08-18)
+## Phase 5 - Complete (2026-08-18)
 
 ### 🎯 Summary
 All phases of core functionality are now complete. Lunefetch is production-ready with:
@@ -100,7 +101,7 @@ All phases of core functionality are now complete. Lunefetch is production-ready
 
 ---
 
-## [3.0.0] - Performance Scaling (Phase 4)
+## Phase 4 - Performance Scaling
 
 ### Speed Limit Features
 **Per-Task Speed Limit** ✓
@@ -130,7 +131,7 @@ All phases of core functionality are now complete. Lunefetch is production-ready
 
 ---
 
-## [2.0.0] - Error Recovery & File Safety (Phase 3)
+## Phase 3 - Error Recovery and File Safety
 
 ### Retry Loop & Exponential Backoff
 **downloadChunkWithRetry()** ✓
@@ -153,7 +154,7 @@ type Config struct {
 
 ---
 
-## [1.1.0] - Concurrency Safety (Phase 2)
+## Phase 2 - Concurrency Safety
 
 ### Mutex Protection
 **DownloadTable concurrency** ✓
@@ -170,7 +171,7 @@ type Config struct {
 
 ---
 
-## [1.0.0] - Keyboard Shortcuts (Phase 1)
+## Phase 1 - Keyboard Shortcuts
 
 ### Implemented Shortcuts
 | Key | Action |
@@ -294,7 +295,7 @@ Developed for high-throughput download management with:
 - Production-grade reliability
 
 
-## [4.1.0] - Visual Enhancements Complete (2026-08-18)
+## Phase 5.1 - Visual Enhancements (2026-08-18)
 
 ### Phase 5.1 - Color-Coded Progress Bars ✓
 - Threshold-based color system for progress bars:
