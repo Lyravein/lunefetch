@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,8 +117,12 @@ func TestSaveIsAtomicAndLeavesNoTempFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat config: %v", err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("config mode = %v, want 0600", perm)
+	// Windows has no POSIX mode bits; Go reports 0666 there regardless of the
+	// Chmod call, so the confidentiality check is Unix-only.
+	if runtime.GOOS != "windows" {
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("config mode = %v, want 0600", perm)
+		}
 	}
 
 	raw, err := os.ReadFile(path)
