@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -38,6 +40,9 @@ func TestLockIsReusableAfterRelease(t *testing.T) {
 	second.Release()
 }
 
+// The pid must stay readable while the lock is held. Windows byte-range locks
+// are mandatory, so locking byte 0 made the file unreadable even to the owner;
+// the lock now sits on a sentinel byte past any content.
 func TestAcquireCreatesLockFileWithPid(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "state")
 
@@ -49,9 +54,13 @@ func TestAcquireCreatesLockFileWithPid(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(dir, "lunefetch.lock"))
 	if err != nil {
-		t.Fatalf("read lock file: %v", err)
+		t.Fatalf("read lock file while held: %v", err)
 	}
-	if len(data) == 0 {
-		t.Fatal("lock file is empty, want the owning pid for diagnostics")
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("lock file content = %q, want the owning pid: %v", data, err)
+	}
+	if pid != os.Getpid() {
+		t.Fatalf("lock file pid = %d, want %d", pid, os.Getpid())
 	}
 }

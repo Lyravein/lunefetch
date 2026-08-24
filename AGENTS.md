@@ -226,6 +226,11 @@ target, and produces paths relative to the working directory.
 the database. Two processes would share the single SQLite connection and write
 the same `.part` files, so a second launch exits with a message instead.
 
+Windows byte-range locks are mandatory, not advisory: a locked region cannot be
+read even through another handle in the same process. The lock therefore sits on
+a sentinel byte at offset 2^32, past any file content, so the pid written for
+diagnostics stays readable. Do not move it back to byte 0.
+
 ### 10. Keep SQLite Pragmas In The DSN
 `foreign_keys` and `busy_timeout` are set in the connection string and verified
 at open. A bare `PRAGMA` Exec only configures one connection, which silently
