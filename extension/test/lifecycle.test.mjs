@@ -92,6 +92,11 @@ test("messages from untrusted senders are rejected", async () => {
     { id: "some-other-extension" },
     { tab: { id: 4 }, url: "https://evil.example.com/page" },
     { url: "https://evil.example.com/page", origin: "https://evil.example.com" },
+    // A content script injected into a page: the sender carries this
+    // extension's id but the host page's URL.
+    { id: "mock-extension-id", tab: { id: 7 }, url: "https://evil.example.com/page" },
+    // Tab-scoped with nothing to verify.
+    { id: "mock-extension-id", tab: { id: 8 } },
   ];
   for (const sender of untrusted) {
     let response;
@@ -105,6 +110,29 @@ test("messages from untrusted senders are rejected", async () => {
 
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(nativeHost.calls.filter((call) => call.action === "download"), []);
+});
+
+// An extension page opened in a tab (options.html, batch.html) carries
+// sender.tab in Chromium. Rejecting every tab-scoped sender broke the options
+// page: its get-state never resolved and every field rendered empty.
+test("extension pages opened in a tab are accepted", async () => {
+  const mock = createMockBrowser({ nativeHost: createNativeHost(async () => accepted()) });
+  await loadBackground(mock, false);
+
+  let response;
+  await mock.api.runtime.onMessage.emit(
+    { type: "get-state" },
+    {
+      id: mock.api.runtime.id,
+      url: "mock-extension://options.html",
+      origin: "mock-extension://",
+      tab: { id: 12, url: "mock-extension://options.html" },
+    },
+    (value) => { response = value; },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(response?.settings, "an extension page in a tab was refused");
+  assert.ok(response.settings.extensions.length > 0);
 });
 
 test("messages from the extension's own pages are accepted", async () => {

@@ -16,8 +16,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # libwayland-dev and libxkbcommon-dev are required by Fyne's glfw backend.
+      # Without them the GUI packages fail to compile and the whole run dies.
       - name: Install Fyne build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes gcc libgl1-mesa-dev xorg-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc libgl1-mesa-dev libwayland-dev \
+            libxkbcommon-dev xorg-dev
       - name: Vet
         run: go vet ./...
       - name: Run all tests
@@ -33,9 +38,16 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # -race needs cgo, so gcc has to be on PATH in the steps that follow;
+      # choco only updates the PATH of the shell that ran it.
       - name: Install Windows build dependencies
         shell: pwsh
-        run: choco install mingw innosetup --no-progress --yes
+        run: |
+          choco install mingw innosetup --no-progress --yes
+          Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+          refreshenv
+          Split-Path (Get-Command gcc).Source |
+            Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Vet
         run: go vet ./...
       # The whole suite runs here, not just internal/ui: the single-instance

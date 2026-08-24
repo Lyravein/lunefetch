@@ -319,25 +319,29 @@ async function handleMessage(message) {
 // Only this extension's own pages may drive handoffs. Without the sender check a
 // web page that learns the extension id (or any other installed extension) could
 // post messages here and queue downloads.
+//
+// The discriminator is the sender's URL, not the presence of a tab: an extension
+// page opened in a tab (options.html) legitimately carries sender.tab in
+// Chromium, while a content script's URL is the host page's.
 function isTrustedSender(sender) {
   if (!sender) return false;
   if (sender.id && sender.id !== ext.runtime.id) return false;
-  // A tab-scoped sender is a content script or page; this extension registers
-  // none, so anything with a tab is untrusted.
-  if (sender.tab) return false;
-  const origin = sender.origin || (sender.url ? originOf(sender.url) : "");
-  const own = originOf(ext.runtime.getURL(""));
-  if (origin && own && origin !== own) return false;
+
+  const base = ext.runtime.getURL("");
+  const url = sender.url || "";
+  if (url) {
+    if (base && !url.startsWith(base)) return false;
+  } else if (sender.tab) {
+    // Tab-scoped with no URL to verify: not something this extension sends.
+    return false;
+  }
+
+  // sender.origin has no trailing slash, so compare it as a prefix of base.
+  const origin = sender.origin || "";
+  if (origin && base && !base.startsWith(origin)) return false;
   return true;
 }
 
-function originOf(raw) {
-  try {
-    return new URL(raw).origin;
-  } catch {
-    return "";
-  }
-}
 
 ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!isTrustedSender(sender)) {
