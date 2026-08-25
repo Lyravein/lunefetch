@@ -18,6 +18,17 @@ historical reference.
   interception-dedupe map and the per-download attempt map only ever had entries
   added. 100,000 handoffs retained every one of them. Both maps are now pruned
   to the dedupe window on each handoff.
+- **Missing optional host access looked like a working extension.** Firefox MV3
+  makes `<all_urls>` optional, so a user who declined it saw downloads stay in
+  Firefox while the popup still reported the desktop app as connected. The
+  popup now detects this state and offers an `Allow all sites` button that calls
+  `permissions.request` directly from the click gesture.
+- The new permission panel is explicitly hidden on Chromium. Its `.site`
+  display rule initially overrode the HTML `hidden` attribute; a global
+  `[hidden]` rule now keeps hidden UI out of layout.
+- Runtime messages now require both this extension's id and a URL in this
+  extension's own origin. Senders with missing identity are rejected rather than
+  trusted by default.
 
 ## [1.1.2] - 2026-08-25
 

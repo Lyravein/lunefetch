@@ -30,6 +30,8 @@ try {
   await popup.locator("#enabled").waitFor();
   assert.equal(await popup.locator(".brand strong").textContent(), "Lunefetch");
   assert.match(await popup.locator("#status-detail").textContent(), /Install|Start|connected|Contacting/i);
+  assert.equal(await popup.locator("#site-access").isHidden(), true,
+    "Chromium must not show Firefox's optional host-permission prompt");
 
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionID}/options.html`);

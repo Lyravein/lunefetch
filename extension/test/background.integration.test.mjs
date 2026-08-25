@@ -58,14 +58,15 @@ test("batch hints are forwarded and failures can be retried", async () => {
   await loadBackground(mock, false);
   const item = { url: "https://example.com/a.zip", filename: "release.zip", saveDir: "/tmp/downloads" };
 
-  const [results] = await mock.api.runtime.onMessage.emit({ type: "send-batch", items: [item] }, {}, () => {});
+  const sender = { id: mock.api.runtime.id, url: "mock-extension://batch.html" };
+  const [results] = await mock.api.runtime.onMessage.emit({ type: "send-batch", items: [item] }, sender, () => {});
   assert.equal(results, true);
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepEqual(nativeHost.calls[1], { action: "download", url: item.url, filename: item.filename, save_dir: item.saveDir });
   assert.equal(mock.storageData.handoffFailures.length, 1);
 
   const id = mock.storageData.handoffFailures[0].id;
-  await mock.api.runtime.onMessage.emit({ type: "retry-failure", id }, {}, () => {});
+  await mock.api.runtime.onMessage.emit({ type: "retry-failure", id }, sender, () => {});
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(mock.storageData.handoffFailures.length, 0);
 });
@@ -94,7 +95,7 @@ test("Chromium service-worker restart reloads persisted controls", async () => {
   await loadBackground(first, false);
   const [response] = await first.api.runtime.onMessage.emit(
     { type: "update-settings", settings: { enabled: false } },
-    {},
+    { id: first.api.runtime.id, url: "mock-extension://options.html" },
     () => {},
   );
   assert.equal(response, true);
@@ -243,4 +244,53 @@ test("the webRequest listener is registered with a request-type filter", async (
   for (const noisy of ["xmlhttprequest", "script", "image", "ping", "beacon", "stylesheet", "websocket"]) {
     assert.ok(!match.types.includes(noisy), `${noisy} must not be registered`);
   }
+});
+
+// Firefox MV3 makes manifest host_permissions optional. A user who declined
+// them gets silent fallthrough — every download stays in Firefox while the
+// popup reports the desktop app as connected. The popup needs to know.
+async function popupState(mock, firefox, type = "get-state") {
+  const sender = { id: "mock-extension-id", url: "mock-extension://popup.html" };
+  // Firefox resolves the listener's return value; Chromium answers through the
+  // sendResponse callback and returns true.
+  if (firefox) {
+    const [state] = await mock.api.runtime.onMessage.emit({ type }, sender, () => {});
+    return state;
+  }
+  let captured;
+  await mock.api.runtime.onMessage.emit({ type }, sender, (value) => { captured = value; });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  return captured;
+}
+
+test("background reports ungranted host permissions on Firefox", async () => {
+  const mock = createMockBrowser({
+    firefox: true,
+    nativeHost: createNativeHost(async () => accepted()),
+    hostPermissionsGranted: false,
+  });
+  await loadBackground(mock, true);
+
+  assert.deepEqual((await popupState(mock, true)).hostPermissions, { granted: false, supported: true });
+  assert.deepEqual(
+    (await popupState(mock, true, "refresh-status")).hostPermissions,
+    { granted: false, supported: true },
+  );
+});
+
+test("granted host permissions never ask the user for anything", async () => {
+  const mock = createMockBrowser({ firefox: true, nativeHost: createNativeHost(async () => accepted()) });
+  await loadBackground(mock, true);
+
+  assert.deepEqual((await popupState(mock, true)).hostPermissions, { granted: true, supported: true });
+  assert.equal(mock.calls.permissionRequests, 0, "the worker must never request permissions itself");
+});
+
+// Chromium grants manifest host permissions at install time, so the popup row
+// must never appear there.
+test("host permission state is not surfaced on Chromium", async () => {
+  const mock = createMockBrowser({ nativeHost: createNativeHost(async () => accepted()) });
+  await loadBackground(mock, false);
+
+  assert.deepEqual((await popupState(mock, false)).hostPermissions, { granted: true, supported: false });
 });

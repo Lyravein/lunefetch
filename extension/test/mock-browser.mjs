@@ -35,7 +35,15 @@ export function createNativeHost(handler = async () => accepted()) {
   };
 }
 
-export function createMockBrowser({ firefox = false, nativeHost, storageData = {}, pageLinks = [] } = {}) {
+export function createMockBrowser({
+  firefox = false,
+  nativeHost,
+  storageData = {},
+  pageLinks = [],
+  // Firefox MV3 treats manifest host_permissions as optional; tests use this to
+  // simulate a user who declined them. Chromium ignores the flag.
+  hostPermissionsGranted = true,
+} = {}) {
   const host = nativeHost || createNativeHost();
   const calls = {
     badges: [],
@@ -45,6 +53,7 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
     contextUpdated: [],
     erased: [],
     notifications: [],
+    permissionRequests: 0,
     scripts: [],
     tabsCreated: [],
     titles: [],
@@ -107,6 +116,12 @@ export function createMockBrowser({ firefox = false, nativeHost, storageData = {
     notifications: {
       async create(options) { calls.notifications.push(options); return String(calls.notifications.length); },
     },
+    permissions: firefox
+      ? {
+          contains: async () => hostPermissionsGranted,
+          request: async () => { calls.permissionRequests++; return true; },
+        }
+      : undefined,
     action: {
       async setBadgeText(options) { calls.badges.push(options.text); },
       async setBadgeBackgroundColor() {},

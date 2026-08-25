@@ -1,5 +1,7 @@
 import { activeTab, openOptions, runtimeMessage } from "./ui.mjs";
 
+const ext = typeof browser !== "undefined" ? browser : chrome;
+
 const $ = (id) => document.getElementById(id);
 let state;
 let host = "";
@@ -37,6 +39,22 @@ function render(next) {
     row.append(label, retry);
     return row;
   }) : [document.createTextNode("No recent handoff failures")]));
+  renderSiteAccess(state.hostPermissions);
+}
+
+// Firefox MV3 makes manifest host_permissions optional. A user who declined
+// them gets silent fallthrough — every download stays in Firefox while this
+// popup reports the desktop app as connected. The row only appears when the
+// browser supports the check and the permission is missing.
+function renderSiteAccess(permissions = {}) {
+  const needed = permissions.supported && !permissions.granted;
+  $("site-access").hidden = !needed;
+  $("site-access").classList.toggle("access-needed", needed);
+  if (!needed) return;
+  $("access-host").textContent = host || "All sites";
+  const grant = $("grant");
+  grant.replaceChildren(document.createTextNode("Allow all sites"));
+  grant.disabled = false;
 }
 
 async function updateSettings(settings) {
@@ -57,6 +75,23 @@ $("bypass").addEventListener("click", async () => {
   $("bypass").disabled = true;
 });
 $("options").addEventListener("click", () => openOptions());
+// permissions.request must run inside the click's user-gesture call stack, so
+// this talks to the browser API directly instead of the background worker.
+$("grant").addEventListener("click", async () => {
+  const grant = $("grant");
+  grant.disabled = true;
+  try {
+    const granted = await ext.permissions.request({ origins: ["<all_urls>"] });
+    if (granted) {
+      $("site-access").hidden = true;
+      render(await runtimeMessage({ type: "refresh-status" }));
+    } else {
+      grant.disabled = false;
+    }
+  } catch {
+    grant.disabled = false;
+  }
+});
 $("clear-failures").addEventListener("click", async () => {
   await runtimeMessage({ type: "clear-failures" });
   render(await runtimeMessage({ type: "get-state" }));
@@ -71,6 +106,8 @@ async function start() {
     host = url.hostname;
     $("site-host").textContent = host;
     $("bypass").disabled = false;
+    // The host is now known; the access row can name it.
+    renderSiteAccess(state?.hostPermissions);
   } catch {
     // Internal browser pages do not expose a URL to extensions.
   }

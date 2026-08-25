@@ -29,6 +29,7 @@ const BYPASS_TTL_MS = 60 * 60 * 1000;
 let settings = normalizeSettings(DEFAULT_SETTINGS);
 let connection = { success: false, outcome: "app_unavailable", message: "Checking Lunefetch connection" };
 let failures = [];
+let hostPermissions = { granted: true, supported: false };
 
 // The Chromium service worker is terminated when idle and restarted by the next
 // event, which resets every module-scope variable above. Listeners must be
@@ -176,6 +177,30 @@ async function updateConnectionStatus() {
   return connection;
 }
 
+// Firefox MV3 treats manifest host_permissions as optional: a user can decline
+// them at install time or revoke them later. Without host access the
+// webRequest listener never fires and downloads fall through to Firefox
+// silently, while the popup still reports the desktop app as connected — which
+// reads like the extension is broken. Chromium grants these at install, so the
+// row simply never appears there.
+const ALL_URLS = { origins: ["<all_urls>"] };
+
+async function updateHostPermissions() {
+  // Chromium grants declared host permissions at install time. Keeping this
+  // Firefox-only avoids treating callback-style Chrome APIs as promises on
+  // older Chromium builds and accidentally showing a false warning.
+  if (!isFirefox || !ext.permissions?.contains) {
+    hostPermissions = { granted: true, supported: false };
+    return hostPermissions;
+  }
+  try {
+    hostPermissions = { granted: await ext.permissions.contains(ALL_URLS), supported: true };
+  } catch {
+    hostPermissions = { granted: true, supported: false };
+  }
+  return hostPermissions;
+}
+
 function mayIntercept(url) {
   return shouldAutomaticallyIntercept(url, settings, connection.success);
 }
@@ -275,10 +300,12 @@ function sanitizeHint(item = {}) {
 
 async function handleMessage(message) {
   await ready();
-  if (message?.type === "get-state") return { settings, connection, diagnostic: diagnosticFor(connection), failures };
+  if (message?.type === "get-state") {
+    return { settings, connection, diagnostic: diagnosticFor(connection), failures, hostPermissions };
+  }
   if (message?.type === "refresh-status") {
-    await updateConnectionStatus();
-    return { settings, connection, diagnostic: diagnosticFor(connection) };
+    await Promise.all([updateConnectionStatus(), updateHostPermissions()]);
+    return { settings, connection, diagnostic: diagnosticFor(connection), hostPermissions };
   }
   if (message?.type === "update-settings") return saveSettings({ ...settings, ...message.settings });
   if (message?.type === "reset-settings") return saveSettings(DEFAULT_SETTINGS);
@@ -331,16 +358,11 @@ async function handleMessage(message) {
 // Chromium, while a content script's URL is the host page's.
 function isTrustedSender(sender) {
   if (!sender) return false;
-  if (sender.id && sender.id !== ext.runtime.id) return false;
+  if (sender.id !== ext.runtime.id) return false;
 
   const base = ext.runtime.getURL("");
   const url = sender.url || "";
-  if (url) {
-    if (base && !url.startsWith(base)) return false;
-  } else if (sender.tab) {
-    // Tab-scoped with no URL to verify: not something this extension sends.
-    return false;
-  }
+  if (!url || !base || !url.startsWith(base)) return false;
 
   // sender.origin has no trailing slash, so compare it as a prefix of base.
   const origin = sender.origin || "";
@@ -376,7 +398,7 @@ async function start() {
   await loadSettings();
   await pruneBatchDraft();
   await createContextMenus();
-  await updateConnectionStatus();
+  await Promise.all([updateConnectionStatus(), updateHostPermissions()]);
 }
 
 export const startup = ready().catch((error) => {

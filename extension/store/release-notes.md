@@ -4,6 +4,8 @@
   forever.
 - Fixed: long browsing sessions no longer grow the extension's memory without
   bound.
+- Firefox now tells you when site access was not granted and provides a button
+  to enable it; interception no longer appears connected but silently inactive.
 - Fixed: only real downloads are intercepted. Background requests a page makes on
   its own, such as analytics pings and internal data fetches, are ignored even
   when their response headers look like a file.

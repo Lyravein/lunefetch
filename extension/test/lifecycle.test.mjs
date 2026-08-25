@@ -162,7 +162,7 @@ test("relative destination hints are dropped before reaching the native host", a
       type: "send-batch",
       items: [{ url: "https://example.com/a.zip", saveDir: "../../etc" }],
     },
-    { id: mock.api.runtime.id },
+    { id: mock.api.runtime.id, url: "mock-extension://batch.html" },
     () => {},
   );
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -247,7 +247,7 @@ test("failure history stays bounded across repeated failures", async () => {
   const items = Array.from({ length: 25 }, (_, index) => ({ url: `https://example.com/f${index}.zip` }));
   await mock.api.runtime.onMessage.emit(
     { type: "send-batch", items },
-    { id: mock.api.runtime.id },
+    { id: mock.api.runtime.id, url: "mock-extension://batch.html" },
     () => {},
   );
   await new Promise((resolve) => setTimeout(resolve, 0));

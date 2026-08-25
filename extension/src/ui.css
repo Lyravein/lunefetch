@@ -7,6 +7,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
+[hidden] { display: none !important; }
 button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 11px; }
@@ -31,6 +32,10 @@ button { cursor: pointer; }
 .site > span { color: #66706c; font-size: 12px; }
 .site > strong { grid-column: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .site button { grid-column: 2; grid-row: 1 / 3; }
+.site.access-needed { border-color: #d49b00; }
+.site.access-needed button { grid-column: 2; grid-row: 1; }
+.site .access-hint { grid-column: 1 / 3; color: #8a6100; font-size: 12px; line-height: 1.35; }
+.site.access-needed > span { color: #8a6100; }
 .secondary { border: 1px solid #bac4c0; border-radius: 5px; background: #fff; padding: 6px 9px; color: #27312d; }
 .secondary:hover:not(:disabled) { background: #edf1ef; }
 .secondary:disabled { opacity: .55; cursor: default; }
@@ -77,6 +82,8 @@ textarea:focus { outline: 2px solid #70b793; outline-offset: 1px; border-color: 
   :root, .popup, .options { color: #e8eeeb; background: #151a18; }
   .popup > header, .status, .site, .row-control, .failures, .settings section, .options-header, .batch-row { background: #202624; border-color: #343d39; }
   .brand span, small, .status span, .site > span, .security-note p { color: #aab5b0; }
+  .site.access-needed { border-color: #8a6100; }
+  .site .access-hint { color: #d4b96a; }
   .icon-button, .secondary { color: #dbe3df; }
   .icon-button:hover, .secondary:hover:not(:disabled) { background: #303835; }
   .secondary, textarea, .danger, .field input { background: #202624; border-color: #4d5a55; }
