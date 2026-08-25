@@ -4,6 +4,22 @@ Released versions track the `VERSION` file. Sections labelled `Phase N` predate
 that convention: they are development milestones, not releases, and are kept for
 historical reference.
 
+## [1.1.4] - 2026-08-25
+
+### Fixed
+- Firefox now detects when optional `<all_urls>` access was not granted and
+  shows an **Allow all sites** action in the popup. The request is made from the
+  user's click, as required by Firefox permissions policy, instead of reporting
+  the desktop app as connected while silently leaving downloads in Firefox.
+- The permission panel is hidden correctly on Chromium, where host access is
+  granted at install time. A CSS layout rule previously overrode the HTML
+  `hidden` attribute.
+- Runtime messages now require both this extension's id and a URL under its own
+  extension origin. Messages with missing sender identity are rejected.
+- The Windows limiter-isolation test now compares the free transfer against its
+  throttled peer instead of using a flaky absolute 400ms cutoff on shared CI
+  runners.
+
 ## [1.1.3] - 2026-08-25
 
 ### Fixed
