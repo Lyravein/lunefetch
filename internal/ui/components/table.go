@@ -576,7 +576,18 @@ func (dt *DownloadTable) rowMenuItems(rec *storage.DownloadRecord) []*fyne.MenuI
 	case "downloading":
 		items = append(items, fyne.NewMenuItem("Pause", fire("pause")), fyne.NewMenuItem("Cancel", fire("cancel")))
 	case "completed":
-		items = append(items, fyne.NewMenuItem("Open File", fire("open_file")))
+		// Open File opens the file. Re-fetching is a separate, destructive
+		// action with its own confirmation — it must never be what a user gets
+		// when they ask to open something.
+		items = append(items,
+			fyne.NewMenuItem("Open File", fire("open_file")),
+			fyne.NewMenuItem("Download Again…", fire("download_again")),
+		)
+	case "cancelled":
+		items = append(items,
+			fyne.NewMenuItem("Download Again…", fire("download_again")),
+			fyne.NewMenuItem("Cancel", fire("cancel")),
+		)
 	default:
 		items = append(items, fyne.NewMenuItem("Resume", fire("resume")), fyne.NewMenuItem("Cancel", fire("cancel")))
 	}

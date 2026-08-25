@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Lunefetch",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Intercept downloads and send them to Lunefetch",
 
   "icons": {

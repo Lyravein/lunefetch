@@ -164,3 +164,84 @@ func TestPragmasAreEnforced(t *testing.T) {
 		t.Fatalf("busy_timeout = %d, want a positive timeout", busyTimeout)
 	}
 }
+
+// ResetProgress backs the "Download Again" flow. It must clear every recorded
+// byte, because the caller deletes the file on disk straight afterwards: any
+// surviving progress would make the next run resume against bytes that are gone.
+func TestResetProgressClearsDownloadAndChunkBytes(t *testing.T) {
+	sm := newQueueState(t)
+
+	id, err := sm.CreateDownloadWithChunks("https://example.com/f.zip", "f.zip", t.TempDir(),
+		"Compressed", 100, true, []int64{0, 50}, []int64{49, 99}, "etag", "mod")
+	if err != nil {
+		t.Fatalf("create download: %v", err)
+	}
+	if err := sm.UpdateChunkProgress(id, 0, 50, "completed"); err != nil {
+		t.Fatalf("chunk 0 progress: %v", err)
+	}
+	if err := sm.UpdateChunkProgress(id, 1, 50, "completed"); err != nil {
+		t.Fatalf("chunk 1 progress: %v", err)
+	}
+	if err := sm.UpdateDownloadStatus(id, "completed"); err != nil {
+		t.Fatalf("set status: %v", err)
+	}
+
+	if err := sm.ResetProgress(id, "pending"); err != nil {
+		t.Fatalf("ResetProgress: %v", err)
+	}
+
+	rec, err := sm.GetDownload(id)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	if rec.DownloadedSize != 0 {
+		t.Errorf("downloaded_size = %d, want 0", rec.DownloadedSize)
+	}
+	if rec.Status != "pending" {
+		t.Errorf("status = %q, want pending", rec.Status)
+	}
+	if rec.QueuePosition.Valid {
+		t.Errorf("queue_position = %v, want NULL", rec.QueuePosition.Int64)
+	}
+	// The URL and filename must survive: the flow reuses the record instead of
+	// re-resolving the URL over the network.
+	if rec.URL != "https://example.com/f.zip" || rec.Filename != "f.zip" {
+		t.Errorf("record identity changed: url=%q filename=%q", rec.URL, rec.Filename)
+	}
+
+	chunks, err := sm.GetChunks(id)
+	if err != nil {
+		t.Fatalf("get chunks: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("chunk count = %d, want 2", len(chunks))
+	}
+	for _, c := range chunks {
+		if c.DownloadedSize != 0 || c.Status != "pending" {
+			t.Errorf("chunk %d = (%d bytes, %q), want (0, pending)", c.ChunkIndex, c.DownloadedSize, c.Status)
+		}
+		if c.StartByte == c.EndByte {
+			t.Errorf("chunk %d lost its byte range", c.ChunkIndex)
+		}
+	}
+}
+
+// A missing row must be reported, not silently ignored: the caller deletes the
+// user's file immediately after a successful reset.
+func TestResetProgressFailsForUnknownDownload(t *testing.T) {
+	sm := newQueueState(t)
+	if err := sm.ResetProgress(9999, "pending"); err == nil {
+		t.Fatal("ResetProgress accepted a nonexistent download")
+	}
+}
+
+func TestResetProgressFailsForDeletedDownload(t *testing.T) {
+	sm := newQueueState(t)
+	id := newQueuedRow(t, sm, "gone.zip", 1)
+	if err := sm.DeleteDownload(id); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if err := sm.ResetProgress(id, "pending"); err == nil {
+		t.Fatal("ResetProgress accepted a soft-deleted download")
+	}
+}

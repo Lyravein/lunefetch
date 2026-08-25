@@ -123,7 +123,9 @@ npm run lint:firefox
 Shortcuts that are also meaningful while typing are ignored when a text field has
 focus. Per-row actions — open file, open folder, copy URL, set speed limit,
 remove — live in the row's action menu. A queued row additionally offers
-**Move Up in Queue** and **Move Down in Queue**.
+**Move Up in Queue** and **Move Down in Queue**, and a finished row offers
+**Download Again**, which deletes the file and re-fetches every byte after
+confirmation.
 
 ### Background Mode
 

@@ -682,6 +682,44 @@ func (sm *StateManager) DeleteDownload(id int64) error {
 	return err
 }
 
+// ResetProgress clears all recorded progress for a download and puts it back in
+// the given status, so the next start re-fetches every byte. It is used by the
+// "Download Again" flow, which keeps the record (same id, url, and filename)
+// instead of deleting it and re-resolving the URL over the network.
+func (sm *StateManager) ResetProgress(id int64, status string) error {
+	tx, err := sm.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(
+		`UPDATE downloads SET downloaded_size = 0, status = ?, queue_position = NULL,
+		 updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND deleted_at IS NULL`,
+		status, id,
+	)
+	if err != nil {
+		return fmt.Errorf("reset download: %w", err)
+	}
+	// A missing or already-deleted row must not silently look like a success:
+	// the caller is about to delete the file on disk.
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("download %d not found", id)
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE chunks SET downloaded_size = 0, status = 'pending', error = NULL,
+		 retry_count = 0, updated_at = CURRENT_TIMESTAMP
+		 WHERE download_id = ?`,
+		id,
+	); err != nil {
+		return fmt.Errorf("reset chunks: %w", err)
+	}
+
+	return tx.Commit()
+}
+
 // DeleteWithFile melakukan soft delete sekaligus membersihkan chunk progress.
 // Dipanggil saat user menekan D (hapus entri + file); file di-remove oleh pemanggil.
 // Chunk di-reset supaya entri yang di-restore tidak mencoba resume dari progress

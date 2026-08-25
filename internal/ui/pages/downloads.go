@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -103,15 +104,15 @@ func NewDownloadsPage(sm *storage.StateManager, cfg *config.Config, globalLimite
 			case "queue_down":
 				dp.MoveInQueue(id, 1)
 			case "open_file":
-				rec, _ := dp.sm.GetDownload(id)
-				if rec != nil && (rec.Status == "completed" || rec.Status == "cancelled") {
-					components.ShowFreshRestartDialog(dp.window, rec, func() {
-						dp.DeleteDownload(id) // Delete existing first
-						// Caller must handle re-adding the URL
-					})
+				dp.openFile(id)
+			case "download_again":
+				rec, err := dp.sm.GetDownload(id)
+				if err != nil || rec == nil {
 					return
 				}
-				dp.openFile(id)
+				components.ShowDownloadAgainDialog(dp.window, rec, func() {
+					dp.DownloadAgain(id)
+				})
 			}
 		},
 		func(ids []int64, action string) {
@@ -195,11 +196,73 @@ func (dp *DownloadsPage) openFile(id int64) {
 	if err != nil || rec == nil {
 		return
 	}
-	dir := rec.SaveDir
-	if dir == "" {
-		dir = dp.cfg.DownloadDir
+	path, err := dp.filePath(rec)
+	if err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Cannot open this download:\n%v", err))
+		return
 	}
-	openSystemPath(filepath.Join(dir, rec.Filename))
+	// Handing a missing path to the OS opener does nothing visible on Windows,
+	// so the user gets no indication the file moved or was deleted elsewhere.
+	if _, err := os.Stat(path); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf(
+			"%q is no longer at:\n%s\n\nIt may have been moved or deleted outside Lunefetch.",
+			rec.Filename, path))
+		return
+	}
+	openSystemPath(path)
+}
+
+// filePath resolves a record's finished destination, applying the same
+// confinement rule used when the download was started.
+func (dp *DownloadsPage) filePath(rec *storage.DownloadRecord) (string, error) {
+	saveDir := rec.SaveDir
+	if saveDir == "" {
+		saveDir = dp.cfg.DownloadDir
+	}
+	return core.SafeDownloadPath(saveDir, rec.Filename)
+}
+
+// DownloadAgain re-fetches a finished download from the start. The record is
+// kept, so the id, URL, and filename stay stable and no second network round
+// trip is needed to re-resolve the URL.
+//
+// Order matters: progress is reset before the file is deleted, so a failure to
+// reset cannot leave the user with neither the old file nor a queued download.
+func (dp *DownloadsPage) DownloadAgain(id int64) {
+	rec, err := dp.sm.GetDownload(id)
+	if err != nil || rec == nil {
+		return
+	}
+	path, err := dp.filePath(rec)
+	if err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Cannot restart this download:\n%v", err))
+		return
+	}
+
+	// Stop any in-flight worker first; it would keep writing to the .part file.
+	dp.cancelActive(id)
+
+	if err := dp.sm.ResetProgress(id, "pending"); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Failed to reset download progress:\n%v", err))
+		return
+	}
+
+	// Clear both the finished file and any stale .part, otherwise the next run
+	// resumes against bytes that no longer match the reset chunk state.
+	if err := core.CleanupFile(path); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Failed to delete the existing file:\n%v", err))
+		return
+	}
+	saveDir := rec.SaveDir
+	if saveDir == "" {
+		saveDir = dp.cfg.DownloadDir
+	}
+	core.CleanupFile(partPath(saveDir, id)) //nolint:errcheck
+
+	if _, err := dp.qm.TryStart(id); err != nil {
+		components.ShowError(dp.window, fmt.Sprintf("Failed to queue the download:\n%v", err))
+	}
+	dp.Refresh()
 }
 
 // openSystemPath opens a path with the OS default handler.

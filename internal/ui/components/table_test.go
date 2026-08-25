@@ -3,6 +3,7 @@ package components
 import (
 	"testing"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"github.com/lyravein/lunefetch/internal/storage"
 	"github.com/lyravein/lunefetch/internal/ui/store"
@@ -155,5 +156,65 @@ func TestRowMenuQueueItemsFireDirectionalActions(t *testing.T) {
 	}
 	if len(actions) != 2 || actions[0] != "queue_up" || actions[1] != "queue_down" {
 		t.Fatalf("actions = %v, want [queue_up queue_down]", actions)
+	}
+}
+
+// Open File must open the file. It previously shared a menu entry with a
+// destructive re-download, so a completed row had no way to be opened at all.
+func TestCompletedRowOffersOpenAndDownloadAgainSeparately(t *testing.T) {
+	var actions []string
+	dt := NewDownloadTable(nil, nil, func(id int64, action string) {
+		actions = append(actions, action)
+	}, nil)
+	dt.window = test.NewWindow(nil)
+	defer dt.window.Close()
+
+	items := dt.rowMenuItems(&storage.DownloadRecord{ID: 1, Status: "completed", Filename: "f.zip"})
+
+	byLabel := map[string]*fyne.MenuItem{}
+	for _, it := range items {
+		byLabel[it.Label] = it
+	}
+	open, ok := byLabel["Open File"]
+	if !ok {
+		t.Fatal("completed row has no Open File entry")
+	}
+	again, ok := byLabel["Download Again…"]
+	if !ok {
+		t.Fatal("completed row has no Download Again entry")
+	}
+
+	open.Action()
+	again.Action()
+	if len(actions) != 2 || actions[0] != "open_file" || actions[1] != "download_again" {
+		t.Fatalf("actions = %v, want [open_file download_again]", actions)
+	}
+}
+
+// Re-fetching is destructive, so it must not appear on a row whose bytes are
+// still wanted or in flight.
+func TestDownloadAgainOnlyOnFinishedRows(t *testing.T) {
+	dt := NewDownloadTable(nil, nil, nil, nil)
+	dt.window = test.NewWindow(nil)
+	defer dt.window.Close()
+
+	has := func(status, label string) bool {
+		for _, it := range dt.rowMenuItems(&storage.DownloadRecord{ID: 1, Status: status}) {
+			if it.Label == label {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, status := range []string{"completed", "cancelled"} {
+		if !has(status, "Download Again…") {
+			t.Errorf("status %q should offer Download Again", status)
+		}
+	}
+	for _, status := range []string{"downloading", "queued", "paused", "failed"} {
+		if has(status, "Download Again…") {
+			t.Errorf("status %q must not offer Download Again", status)
+		}
 	}
 }

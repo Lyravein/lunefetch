@@ -159,15 +159,17 @@ func BasenameFromURL(rawURL string) string {
 	return filepath.Base(rawURL)
 }
 
-// ShowFreshRestartDialog asks the user to confirm restarting a finished
-// download from scratch. When confirmed, onConfirm runs; the caller is
-// responsible for deleting the old record/file and re-adding the URL.
-func ShowFreshRestartDialog(w fyne.Window, rec *storage.DownloadRecord, onConfirm func()) {
+// ShowDownloadAgainDialog asks the user to confirm re-downloading a finished
+// download from scratch. onConfirm is only called on approval, and is
+// responsible for deleting the existing file, resetting progress, and starting
+// the download again.
+func ShowDownloadAgainDialog(w fyne.Window, rec *storage.DownloadRecord, onConfirm func()) {
 	msg := "This download is already " + rec.Status + ".\n\n" +
-		"Restarting deletes the existing file and re-downloads everything.\n\n" +
-		"Restart from scratch?"
+		"Downloading again deletes \"" + rec.Filename + "\" and fetches every byte\n" +
+		"from the start.\n\n" +
+		"Download it again?"
 
-	dialog.ShowConfirm("Fresh Restart", msg, func(ok bool) {
+	dialog.ShowConfirm("Download Again", msg, func(ok bool) {
 		if ok && onConfirm != nil {
 			onConfirm()
 		}

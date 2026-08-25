@@ -4,6 +4,25 @@ Released versions track the `VERSION` file. Sections labelled `Phase N` predate
 that convention: they are development milestones, not releases, and are kept for
 historical reference.
 
+## [1.1.1] - 2026-08-24
+
+### Fixed
+- **Open File never opened the file.** On a completed download the action showed
+  the re-download prompt instead, and that prompt was the only thing a completed
+  row's menu could do. Open File now opens the file, on every platform.
+- **Confirming that prompt destroyed the download without re-fetching it.** It
+  soft-deleted the record and nothing ever re-queued the URL, so the entry
+  disappeared from the list and no new download started. The file itself was left
+  on disk under its original name.
+- Re-fetching is now a separate `Download Again` entry with its own
+  confirmation. It keeps the record, so the id, URL, and filename stay stable and
+  no second network request is needed to re-resolve the URL. Progress is reset
+  before the file is deleted, so a failure cannot leave you without either the
+  old file or a queued download. Any stale `.part` file is removed too.
+- Opening a file that has been moved or deleted outside Lunefetch now says so.
+  The path was previously handed to the OS opener unchecked, which does nothing
+  visible on Windows.
+
 ## [1.1.0] - 2026-08-24
 
 ### Desktop UI redesign

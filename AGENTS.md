@@ -148,17 +148,22 @@ onAction := func(id int64, action string) {
     case "delete":
         // Show confirmation first
     case "open_file":
-        rec, _ := dp.sm.GetDownload(id)
-        // Check status for fresh restart dialog
-        if rec.Status == "completed" || rec.Status == "cancelled":
-            components.ShowFreshRestartDialog(dp.window, rec, func() {
-                dp.DeleteDownload(id)
-            })
-            return
+        // Opens the file. Never repurpose this into anything destructive.
         dp.openFile(id)
+    case "download_again":
+        // Destructive: confirm, then reset progress and delete the file.
+        components.ShowDownloadAgainDialog(dp.window, rec, func() {
+            dp.DownloadAgain(id)
+        })
     }
 }
 ```
+
+**Do not fold a destructive action into a read-only one.** `open_file` used to
+show the re-download prompt for completed rows, so Open File could never open
+anything, and confirming it soft-deleted the record without ever re-queueing the
+URL. Re-fetching lives in `download_again` -> `DownloadAgain`, which resets
+progress *before* deleting the file so a failure cannot destroy both.
 
 ## Testing Guidelines
 
