@@ -69,16 +69,30 @@ test("normalizes persisted settings and rejects malformed rules", () => {
 });
 
 test("applies temporary bypass and block rules before allow rules", () => {
+  // Bypasses are absolute timestamps, and normalizeSettings now drops the
+  // expired ones on every load and save, so this fixture uses a far-future
+  // expiry to survive normalization.
   const settings = normalizeSettings({
     allowSites: ["example.com"],
     blockSites: ["private.example.com"],
-    bypassUntil: { "downloads.example.com": 2000 },
+    bypassUntil: { "downloads.example.com": 4_102_444_800_000 }, // 2100-01-01
   });
   assert.equal(siteDecision("https://cdn.example.com/file", settings, 1000).allowed, true);
   assert.equal(siteDecision("https://private.example.com/file", settings, 1000).reason, "blocked_site");
   assert.equal(siteDecision("https://downloads.example.com/file", settings, 1000).reason, "temporary_bypass");
   assert.equal(siteDecision("https://other.test/file", settings, 1000).reason, "not_allowlisted");
-  assert.equal(siteDecision("https://downloads.example.com/file", settings, 3000).allowed, true);
+  // An expired bypass no longer suppresses interception...
+  const expired = normalizeSettings({ bypassUntil: { "downloads.example.com": 2000 } }, 3000);
+  assert.deepEqual(expired.bypassUntil, {});
+  assert.equal(siteDecision("https://downloads.example.com/file", expired, 3000).allowed, true);
+});
+
+test("expired bypass entries are pruned on every normalize", () => {
+  const now = 1000;
+  const settings = normalizeSettings({
+    bypassUntil: { "live.example.com": now + 60_000, "dead.example.com": now - 1, "zero.example.com": 0 },
+  }, now);
+  assert.deepEqual(Object.keys(settings.bypassUntil), ["live.example.com"]);
 });
 
 test("applies global, automatic, and offline fallback controls without weakening preservation", () => {

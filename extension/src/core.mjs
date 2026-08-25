@@ -92,14 +92,17 @@ export function normalizeSiteRule(value) {
   return /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(host) ? host : "";
 }
 
-export function normalizeSettings(value = {}) {
+export function normalizeSettings(value = {}, now = Date.now()) {
   if (!value || typeof value !== "object") value = {};
   const bypassUntil = {};
   if (value.bypassUntil && typeof value.bypassUntil === "object") {
     for (const [rawHost, rawExpiry] of Object.entries(value.bypassUntil)) {
       const host = normalizeSiteRule(rawHost);
       const expiry = Number(rawExpiry);
-      if (host && Number.isFinite(expiry) && expiry > 0) bypassUntil[host] = expiry;
+      // Expired entries are dropped here rather than left to accumulate:
+      // normalizeSettings runs on every load and save, so this is the only
+      // pruning point a bypass ever needs.
+      if (host && Number.isFinite(expiry) && expiry > now) bypassUntil[host] = expiry;
     }
   }
   return {
@@ -265,6 +268,25 @@ export function createHandoffController(adapter, {
   const downloads = new Map();
   const intercepted = new Map();
 
+  // Both maps live for the worker's lifetime. Firefox's background page is
+  // persistent, so entries that nothing ever claims would otherwise accumulate
+  // for the whole browser session.
+  const prune = () => {
+    const cutoff = now() - dedupeWindow;
+    for (const [url, entries] of intercepted) {
+      const live = entries.filter((timestamp) => timestamp >= cutoff);
+      if (live.length) intercepted.set(url, live);
+      else intercepted.delete(url);
+    }
+    // A settled attempt is only useful for a short while after its download
+    // event; nothing reads it again once the window has passed.
+    for (const [id, attempt] of downloads) {
+      if (attempt.state !== "created" && now() - (attempt.settledAt || 0) > dedupeWindow) {
+        downloads.delete(id);
+      }
+    }
+  };
+
   const rememberIntercept = (url) => {
     const entries = intercepted.get(url) || [];
     entries.push(now());
@@ -306,12 +328,16 @@ export function createHandoffController(adapter, {
 
   const interceptFirefox = async (url) => {
     const result = await send(url);
-    if (result.success) rememberIntercept(url);
+    if (result.success) {
+      prune();
+      rememberIntercept(url);
+    }
     return result;
   };
 
   const handleCreated = async (item) => {
     if (!isHTTPURL(item.url)) return { preserved: true, ignored: true };
+    prune();
     if (claimIntercept(item.url)) {
       try {
         await adapter.cancel(item.id);
@@ -333,6 +359,7 @@ export function createHandoffController(adapter, {
     attempt.result = result;
     if (!result.success) {
       attempt.state = "browser_preserved";
+      attempt.settledAt = now();
       return { preserved: true, result };
     }
 
@@ -342,6 +369,7 @@ export function createHandoffController(adapter, {
       attempt.state = "cancelled";
     } catch (error) {
       attempt.state = "accepted_browser_preserved";
+      attempt.settledAt = now();
       return { preserved: true, result, error };
     }
 
@@ -350,9 +378,11 @@ export function createHandoffController(adapter, {
     } catch (error) {
       attempt.eraseError = error;
       attempt.state = "accepted_erase_failed";
+      attempt.settledAt = now();
       return { preserved: true, result, error };
     }
     attempt.state = "completed";
+    attempt.settledAt = now();
     return { preserved: false, result };
   };
 

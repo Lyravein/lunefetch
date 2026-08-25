@@ -4,6 +4,21 @@ Released versions track the `VERSION` file. Sections labelled `Phase N` predate
 that convention: they are development milestones, not releases, and are kept for
 historical reference.
 
+## [1.1.3] - 2026-08-25
+
+### Fixed
+- **Expired one-hour site pauses were kept forever.** Pausing a site wrote an
+  entry into `bypassUntil`, and nothing ever removed it once the hour passed:
+  the entry stayed in extension storage indefinitely, growing the stored
+  settings and leaving a permanent record of every site ever paused.
+  `normalizeSettings` now drops expired entries on every load and save, which is
+  the only pruning point a bypass ever needs.
+- **The handoff controller's bookkeeping maps grew without bound.** Firefox's
+  background page lives for the whole browser session, and both the
+  interception-dedupe map and the per-download attempt map only ever had entries
+  added. 100,000 handoffs retained every one of them. Both maps are now pruned
+  to the dedupe window on each handoff.
+
 ## [1.1.2] - 2026-08-25
 
 ### Fixed
