@@ -180,7 +180,7 @@ async function updateConnectionStatus() {
 // Firefox MV3 treats manifest host_permissions as optional: a user can decline
 // them at install time or revoke them later. Without host access the
 // webRequest listener never fires and downloads fall through to Firefox
-// silently, while the popup still reports the desktop app as connected — which
+// silently, while the popup still reports the desktop app as connected, which
 // reads like the extension is broken. Chromium grants these at install, so the
 // row simply never appears there.
 const ALL_URLS = { origins: ["<all_urls>"] };

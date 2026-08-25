@@ -43,7 +43,7 @@ function render(next) {
 }
 
 // Firefox MV3 makes manifest host_permissions optional. A user who declined
-// them gets silent fallthrough — every download stays in Firefox while this
+// them gets silent fallthrough: every download stays in Firefox while this
 // popup reports the desktop app as connected. The row only appears when the
 // browser supports the check and the permission is missing.
 function renderSiteAccess(permissions = {}) {

@@ -35,9 +35,9 @@ was replaced by inline row details.
 Hasil audit menyeluruh. Dikerjakan sebelum lanjut ke fitur v1.1 lainnya.
 
 ### Kritis
-- [x] `FindByURL` SELECT hanya 13 kolom sementara `scanDownload` membaca 16 — setiap panggilan gagal diam-diam (`internal/storage/state.go:153`)
+- [x] `FindByURL` SELECT hanya 13 kolom sementara `scanDownload` membaca 16: setiap panggilan gagal diam-diam (`internal/storage/state.go:153`)
 - [x] Data race: `SetRecords`/`SetSpeeds` menulis `dt.records`/`dt.speeds` di luar `fyne.Do` (`internal/ui/components/table.go:405,418`)
-- [x] Scheduler tidak pernah memulai download — mengirim `AddURLRequest{}` kosong yang di-skip `addURLLoop` (`main.go:46`)
+- [x] Scheduler tidak pernah memulai download: mengirim `AddURLRequest{}` kosong yang di-skip `addURLLoop` (`main.go:46`)
 
 ### Fungsionalitas Hilang
 - [x] `queue.EnqueueScheduled` belum digunakan oleh GUI (`internal/queue/manager.go:75`)
@@ -45,14 +45,14 @@ Hasil audit menyeluruh. Dikerjakan sebelum lanjut ke fitur v1.1 lainnya.
 - [x] `internal/notify` belum dihubungkan ke UI
 
 ### Optimalisasi
-- [x] `http.Client` dibuat ulang per chunk tanpa timeout — gunakan satu client dengan `ResponseHeaderTimeout`
+- [x] `http.Client` dibuat ulang per chunk tanpa timeout, sehingga gunakan satu client dengan `ResponseHeaderTimeout`
 - [x] Hapus field mati `DownloadsPage.speeds`
 - [x] Konsistenkan penggunaan `downloadEntry.mu` antara Pause dan Cancel
 - [x] Gunakan token theme untuk warna status `downloading`, bukan hardcoded cyan
 
 ### Ditunda
-- Queue reordering di GUI (`MoveQueuePosition` ada tetapi belum diekspos) — fitur baru, bukan bug
-- Unit test komponen Fyne interaktif — store sorting sudah memiliki regression test
+- Queue reordering di GUI (`MoveQueuePosition` ada tetapi belum diekspos), fitur baru, bukan bug
+- Unit test komponen Fyne interaktif: store sorting sudah memiliki regression test
 
 ### Public Release Hardening
 - [x] Validate remote/user filenames and enforce destination containment
@@ -79,7 +79,7 @@ automatic interception, browser-download fallback, and a link context menu.
 The extension sends only replayable HTTP/HTTPS URLs; browser credentials and
 request bodies remain outside the integration boundary.
 
-### Phase 1 — Reliability and Diagnostics
+### Phase 1: Reliability and Diagnostics
 
 - [x] Introduce a tested browser API adapter for Firefox Promise APIs and Chromium callback APIs
 - [x] Validate HTTP/HTTPS URLs before interception or native-messaging handoff
@@ -89,7 +89,7 @@ request bodies remain outside the integration boundary.
 - [x] Add native-host health checks, connection status, and actionable install/start diagnostics
 - [x] Preserve the browser download when cancellation, erase, or handoff fails
 
-### Phase 2 — User Controls
+### Phase 2: User Controls
 
 - [x] Add an action popup showing Lunefetch connection status and interception state
 - [x] Add a global enable/disable toggle without requiring extension reload
@@ -99,7 +99,7 @@ request bodies remain outside the integration boundary.
 - [x] Show badge/notification feedback for accepted handoffs and recoverable failures
 - [x] Keep authenticated download transfer disabled unless a separate consent and secret-handling design is approved
 
-### Phase 3 — Automated Browser Testing
+### Phase 3: Automated Browser Testing
 
 - [x] Unit-test URL/MIME detection, state transitions, fallback recursion, and API compatibility
 - [x] Add a deterministic mock native host for success, timeout, malformed-response, and unavailable-host scenarios
@@ -110,7 +110,7 @@ request bodies remain outside the integration boundary.
 
 The Node integration harness is runnable locally without a browser binary. The Chromium smoke test is configured in CI with Playwright-managed Chromium; the local environment used during development did not provide a usable Chromium executable. Firefox package validation uses `web-ext lint`, while Firefox event behavior is covered through the Promise-API harness.
 
-### Phase 4 — Installation and Distribution
+### Phase 4: Installation and Distribution
 
 - [x] Keep extension and application versions in one source of truth and fail builds on version drift
 - [x] Produce deterministic Firefox and Chromium archives with checksums and release notes
@@ -123,7 +123,7 @@ The Node integration harness is runnable locally without a browser binary. The C
 
 Phase 4 distribution is implementation-complete. Store publication requires maintainer-owned AMO/CWS credentials and review approval; the workflow is intentionally manual and secret-gated. Windows lifecycle validation runs on the Windows CI runner because registry behavior cannot be reproduced on Linux.
 
-### Phase 5 — Post-Release Enhancements
+### Phase 5: Post-Release Enhancements
 
 - [x] Add “Download all with Lunefetch” for selected page links with a confirmation preview
 - [x] Add optional filename and destination hints without transferring credentials
@@ -134,7 +134,7 @@ Phase 5 keeps the integration credential-free. The decision criteria and require
 
 ---
 
-## v1.0 — MVP
+## v1.0: MVP
 
 Everything needed to use Lunefetch comfortably day-to-day.
 
@@ -170,7 +170,7 @@ Everything needed to use Lunefetch comfortably day-to-day.
 
 ---
 
-## v1.1 — UX Improvements
+## v1.1: UX Improvements
 
 Released 2026-08-22. See [CHANGELOG.md](CHANGELOG.md) for the full entry.
 
@@ -184,16 +184,16 @@ Released 2026-08-22. See [CHANGELOG.md](CHANGELOG.md) for the full entry.
 
 ---
 
-## v1.2 — Power User Features
+## v1.2: Power User Features
 
 Features that differentiate Lunefetch from basic download managers.
 
 - [ ] Proxy per download (override global)
-- [ ] Clipboard monitor — detect URL copy, show "Download?" popup
+- [ ] Clipboard monitor: detect URL copy, show "Download?" popup
 - [ ] Export / Import (JSON, TXT)
 - [ ] Theme manager (Dark, Light, and presets; desktop redesign is currently dark-only)
-- [ ] Tags — label downloads, search by `tag:name`
-- [ ] Favorites — pin important downloads
+- [ ] Tags: label downloads, search by `tag:name`
+- [ ] Favorites: pin important downloads
 
 ---
 
@@ -204,7 +204,7 @@ No timeline. Considered only after v1.2 is done.
 - Torrent support
 - Checksum verification (MD5 / SHA-256 / SHA-1)
 - Resume validation beyond `If-Range` (for example `If-Match`)
-- Download mirrors — fallback to mirror if primary fails
+- Download mirrors: fallback to mirror if primary fails
 - Plugin system
 - Remote API
 - Web UI

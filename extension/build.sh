@@ -1,5 +1,5 @@
 #!/bin/bash
-# build.sh — Build Lunefetch extension for Firefox and Chromium.
+# build.sh: Build Lunefetch extension for Firefox and Chromium.
 # Output: dist/lunefetch-firefox.zip, dist/lunefetch-chromium.zip
 
 set -euo pipefail

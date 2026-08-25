@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — Install Lunefetch native messaging host for Firefox and/or Chromium-based browsers.
+# install.sh: Install Lunefetch native messaging host for Firefox and/or Chromium-based browsers.
 
 set -e
 
@@ -109,7 +109,7 @@ install_manifest() {
     fi
     echo "  -> $label: $dir/$MANIFEST_FILE"
   else
-    echo "  (skipping $label — directory not found)"
+    echo "  (skipping $label, directory not found)"
   fi
 }
 
@@ -166,4 +166,4 @@ if $INSTALL_CHROMIUM; then
 fi
 echo ""
 echo "  3. Start Lunefetch: ./lunefetch"
-echo "  4. Try downloading a file — it will be intercepted automatically."
+echo "  4. Try downloading a file; it will be intercepted automatically."

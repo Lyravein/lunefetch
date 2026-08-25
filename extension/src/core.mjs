@@ -21,7 +21,7 @@ export const DOWNLOAD_EXTENSIONS = new Set([
 // its own (xmlhttprequest, ping, beacon, script, image, media, websocket) is
 // never a user download, and a modern page emits dozens of those a minute.
 //
-// Filtering on type is what keeps requests like youtube.com/sw.js_data out —
+// Filtering on type is what keeps requests like youtube.com/sw.js_data out:
 // that is an internal fetch, yet it really does answer with
 // "Content-Disposition: attachment", so header inspection alone cannot tell it
 // apart from a genuine download.

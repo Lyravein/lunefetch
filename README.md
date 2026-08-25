@@ -53,10 +53,10 @@ finished row.
 
 ## Documentation
 
-- [Installation](docs/installation.md) — installers, extension, source build
-- [Configuration](docs/configuration.md) — config fields, file locations, schema
-- [Development](docs/development.md) — project layout, tests, CI
-- [Architecture](ARCHITECTURE.md) — layering rules and design decisions
+- [Installation](docs/installation.md): installers, extension, source build
+- [Configuration](docs/configuration.md): config fields, file locations, schema
+- [Development](docs/development.md): project layout, tests, CI
+- [Architecture](ARCHITECTURE.md): layering rules and design decisions
 - [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
 ## Known limitations

@@ -729,7 +729,7 @@ func (d *Downloader) downloadChunkWithRetry(ctx context.Context, ch Chunk) {
 	}
 
 	// If the context was cancelled during the last retry, don't mark the chunk
-	// as failed — leave it for flushProgress to persist as "paused" so resume
+	// as failed; leave it for flushProgress to persist as "paused" so resume
 	// can pick up from where it left off.
 	if ctx.Err() != nil {
 		return

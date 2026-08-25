@@ -16,7 +16,7 @@ func TestNoOpWhenDisabled(t *testing.T) {
 
 func TestNoOpWhenBinAbsent(t *testing.T) {
 	// Buat notifier dengan enabled=true tapi bin sengaja dikosongkan
-	// lewat New(false) lalu SetEnabled(true) — simulasi kondisi
+	// lewat New(false) lalu SetEnabled(true), simulasi kondisi
 	// notify-send tidak ada di PATH.
 	n := notify.New(false)
 	n.SetEnabled(true)
@@ -26,7 +26,7 @@ func TestNoOpWhenBinAbsent(t *testing.T) {
 }
 
 func TestSendDoesNotBlockCaller(t *testing.T) {
-	// Send dipanggil secara sinkron di sini — caller yang bertugas
+	// Send dipanggil secara sinkron di sini; caller yang bertugas
 	// menjalankannya di goroutine. Test ini hanya verifikasi tidak ada
 	// deadlock atau panic.
 	n := notify.New(false)

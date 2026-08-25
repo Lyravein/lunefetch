@@ -247,7 +247,7 @@ test("the webRequest listener is registered with a request-type filter", async (
 });
 
 // Firefox MV3 makes manifest host_permissions optional. A user who declined
-// them gets silent fallthrough — every download stays in Firefox while the
+// them gets silent fallthrough: every download stays in Firefox while the
 // popup reports the desktop app as connected. The popup needs to know.
 async function popupState(mock, firefox, type = "get-state") {
   const sender = { id: "mock-extension-id", url: "mock-extension://popup.html" };

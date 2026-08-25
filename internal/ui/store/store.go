@@ -1,4 +1,4 @@
-// Package store defines the Store interface — the single point of contact
+// Package store defines the Store interface: the single point of contact
 // between the UI layer and the backend (Storage, Queue, Downloader).
 //
 // UI components must not import storage, queue, or core directly.
@@ -40,7 +40,7 @@ const (
 )
 
 // AddRequest contains everything needed to enqueue a new download.
-// Mirrors ui.AddURLRequest — defined here so pages/components can depend on
+// Mirrors ui.AddURLRequest, defined here so pages/components can depend on
 // store without importing the ui root package.
 type AddRequest struct {
 	URL         string
@@ -55,8 +55,8 @@ type AddRequest struct {
 // All UI mutations and reads go through this interface.
 //
 // Lifecycle:
-//   - Load()   — called once at startup to populate internal state from DB.
-//   - Reload() — force re-read from DB (e.g. after import/restore).
+//   - Load():   called once at startup to populate internal state from DB.
+//   - Reload(): force re-read from DB (e.g. after import/restore).
 //
 // Mutations (Pause, Resume, Cancel, Delete, Retry, Add) automatically
 // refresh the internal state; the UI does not need to call Reload() after them.
@@ -65,11 +65,11 @@ type Store interface {
 	Load() error
 	Reload() error
 
-	// Read — returns the current filtered+sorted+searched view.
+	// Read: returns the current filtered+sorted+searched view.
 	Downloads() []*storage.DownloadRecord
 	Selected() *storage.DownloadRecord
 
-	// View state — filters are applied on the in-memory slice, not on DB.
+	// View state: filters are applied on the in-memory slice, not on DB.
 	SetFilter(status DownloadStatus)
 	// SetCategory uses an empty string for the UI-only All category.
 	SetCategory(category string)
@@ -77,7 +77,7 @@ type Store interface {
 	SetSort(col TableColumn, asc bool)
 	Select(id int64)
 
-	// Mutations — each call updates internal state after the backend op.
+	// Mutations: each call updates internal state after the backend op.
 	Add(req AddRequest)
 	Pause(id int64)
 	Resume(id int64)

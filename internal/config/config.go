@@ -152,7 +152,7 @@ func (c *Config) Save() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	// Write to a temp file in the same directory and rename over the target so a
-	// crash mid-write cannot leave a truncated, unparseable config behind —
+	// crash mid-write cannot leave a truncated, unparseable config behind,
 	// Load() treats a parse error as fatal.
 	tmp, err := os.CreateTemp(filepath.Dir(configFile), ".config-*.yaml")
 	if err != nil {

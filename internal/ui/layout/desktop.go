@@ -115,7 +115,7 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 	guiApp.history = pages.NewHistoryPage(sm, w)
 	guiApp.history.SetPurgeCleaner(guiApp.downloads.RemovePartFile)
 
-	// Queue manager — StartFunc is downloads.StartDownload.
+	// Queue manager: StartFunc is downloads.StartDownload.
 	guiApp.qm = queue.NewManager(sm, cfg.MaxConcurrent, guiApp.downloads.StartDownload)
 	guiApp.downloads.SetQueueManager(guiApp.qm)
 	guiApp.downloads.SetWindow(w)
@@ -135,7 +135,7 @@ func New(sm *storage.StateManager, cfg *config.Config) *App {
 	// Build status bar.
 	guiApp.statusBar = components.NewStatusBar(cfg, guiApp.qm)
 
-	// Sidebar — filters the download list or switches to history.
+	// Sidebar: filters the download list or switches to history.
 	contentStack := container.NewStack(guiApp.downloads.Container())
 
 	guiApp.sidebar = components.NewSidebar(
@@ -216,19 +216,19 @@ func (a *App) configureSystemTray() {
 
 // registerShortcuts wires global keyboard shortcuts onto the window canvas.
 //
-//	Ctrl+N  — open Add URL dialog
-//	Ctrl+F  — focus the search entry
-//	Ctrl+C  — copy the selected download's URL
-//	Ctrl+P  — pause all active downloads
-//	Delete  — remove the selected download (with confirm)
-//	Space   — pause/resume the selected download
+//	Ctrl+N:  open Add URL dialog
+//	Ctrl+F:  focus the search entry
+//	Ctrl+C:  copy the selected download's URL
+//	Ctrl+P:  pause all active downloads
+//	Delete:  remove the selected download (with confirm)
+//	Space:   pause/resume the selected download
 //
 // Every shortcut that is also meaningful inside a text field checks
 // entryFocused() first, so typing in search is never hijacked.
 func (a *App) registerShortcuts(header *components.ContentHeader) {
 	canvas := a.window.Canvas()
 
-	// entryFocused reports whether keyboard focus is inside a text entry —
+	// entryFocused reports whether keyboard focus is inside a text entry,
 	// in which case Delete/Space must not be hijacked.
 	entryFocused := func() bool {
 		_, ok := canvas.Focused().(*widget.Entry)
@@ -345,7 +345,7 @@ func (a *App) refreshLoop() {
 }
 
 // persistWindowSize saves the window size to preferences when it has changed.
-// Runs on the refresh tick — cheap because it only writes on change.
+// Runs on the refresh tick, cheap because it only writes on change.
 func (a *App) persistWindowSize() {
 	size := a.window.Canvas().Size()
 	if size == a.lastSize || size.Width < 760 || size.Height < 480 {
@@ -394,7 +394,7 @@ func (a *App) Shutdown() {
 	})
 }
 
-// HandleAdd implements store.Adder — processes a new download request.
+// HandleAdd implements store.Adder: processes a new download request.
 func (a *App) HandleAdd(req store.AddRequest) {
 	if existing, err := a.sm.FindByURL(req.URL); err == nil && existing != nil {
 		components.ShowError(a.window, fmt.Sprintf("This URL is already in the download list:\n%s", existing.Filename))

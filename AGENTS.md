@@ -29,14 +29,14 @@ GOOS=windows go build ./internal/userpath/ ./internal/singleinstance/ \
 ```
 
 ### Core Files to Know
-- `internal/core/downloader.go` — download engine, ranges, destination policy
-- `internal/core/throttle.go` — global + per-task limiter
-- `internal/storage/state.go` — `DownloadRecord`, schema, migrations
-- `internal/queue/manager.go` — concurrency and queue ordering
-- `internal/ui/components/table.go` — virtualized download list and row renderer
-- `internal/ui/layout/desktop.go` — window assembly, shortcuts, tray
-- `internal/ui/pages/downloads.go` — download lifecycle and row actions
-- `main.go` — startup order: config, instance lock, database, GUI, API
+- `internal/core/downloader.go`: download engine, ranges, destination policy
+- `internal/core/throttle.go`: global + per-task limiter
+- `internal/storage/state.go`: `DownloadRecord`, schema, migrations
+- `internal/queue/manager.go`: concurrency and queue ordering
+- `internal/ui/components/table.go`: virtualized download list and row renderer
+- `internal/ui/layout/desktop.go`: window assembly, shortcuts, tray
+- `internal/ui/pages/downloads.go`: download lifecycle and row actions
+- `main.go`: startup order: config, instance lock, database, GUI, API
 
 ## Desktop UI
 
@@ -44,10 +44,10 @@ Dark-only, default Fyne font. The shell is a 260px sidebar, a content header wit
 greeting/search/`New Download`, summary cards, a virtualized download list, and a
 status bar. `docs/ui-redesign-plan.md` holds the locked design decisions.
 
-- `header.go` — greeting, search, New Download, summary cards
-- `sidebar.go` — status/category routes plus Settings/History/About
-- `table.go` — `widget.List` with a hand-written row renderer
-- `statusbar.go` — overall speed and persisted concurrency control
+- `header.go`: greeting, search, New Download, summary cards
+- `sidebar.go`: status/category routes plus Settings/History/About
+- `table.go`: `widget.List` with a hand-written row renderer
+- `statusbar.go`: overall speed and persisted concurrency control
 
 ### Visual QA loop
 Render components to PNG instead of asking a human for screenshots:
@@ -180,12 +180,12 @@ progress *before* deleting the file so a failure cannot destroy both.
 - Mutex protection verification (`go test -race`)
 
 ### Regression Tests Worth Knowing
-- `internal/core/lifecycle_test.go` — sparse/truncated `.part` rejection, `Done()`
+- `internal/core/lifecycle_test.go`: sparse/truncated `.part` rejection, `Done()`
   closure on every path, cancel-during-spawn, backoff, destination policy
-- `internal/storage/queue_position_test.go` — queue ordering and pragmas
-- `internal/singleinstance/singleinstance_test.go` — second-instance refusal
-- `internal/ui/components/visual_test.go` — row/shell geometry invariants
-- `extension/test/lifecycle.test.mjs` — MV3 restart, sender validation, hints
+- `internal/storage/queue_position_test.go`: queue ordering and pragmas
+- `internal/singleinstance/singleinstance_test.go`: second-instance refusal
+- `internal/ui/components/visual_test.go`: row/shell geometry invariants
+- `extension/test/lifecycle.test.mjs`: MV3 restart, sender validation, hints
 
 ## Gotchas & Common Mistakes
 

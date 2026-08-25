@@ -33,7 +33,7 @@ func ShowAddURLDialog(w fyne.Window, cfg *config.Config, addCh chan<- AddURLRequ
 	filenameEntry := widget.NewEntry()
 	filenameEntry.SetPlaceHolder("(auto from URL)")
 
-	categoryLabel := widget.NewLabel("Category: —")
+	categoryLabel := widget.NewLabel("Category: -")
 
 	saveDirEntry := widget.NewEntry()
 	saveDirEntry.SetPlaceHolder(cfg.DownloadDir)
@@ -57,7 +57,7 @@ func ShowAddURLDialog(w fyne.Window, cfg *config.Config, addCh chan<- AddURLRequ
 	urlEntry.OnChanged = func(raw string) {
 		raw = strings.TrimSpace(raw)
 		if raw == "" {
-			categoryLabel.SetText("Category: —")
+			categoryLabel.SetText("Category: -")
 			return
 		}
 		cat := filecat.FromURL(raw)

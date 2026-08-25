@@ -68,7 +68,7 @@ Does not perform downloads.
 
 ### Storage (`internal/storage/`)
 SQLite persistence. Downloads + chunks.
-Soft-delete model — history is not a separate table, just `deleted_at IS NOT NULL`.
+Soft-delete model: history is not a separate table, just `deleted_at IS NOT NULL`.
 `foreign_keys` and `busy_timeout` are set in the DSN and verified at open, so
 cascade deletes cannot silently stop working. Queue moves are confined to live
 queued rows and clamped to the compacted 1..N range.
@@ -107,22 +107,22 @@ Prefers Fyne's `SendNotification`, which is native on Windows and macOS.
 ### Store (`internal/ui/store/`)
 Single source of truth for the UI.
 Orchestrates Queue, Storage, and Downloader.
-Does NOT contain business logic — that stays in Core/Queue/Storage.
+Does NOT contain business logic; that stays in Core/Queue/Storage.
 
 ### UI (`internal/ui/`)
 Reads state from Store. Calls Store methods for mutations.
 No direct access to any backend layer.
 
 Supporting packages:
-- `assets/` — `AppIcon`, a PNG embedded with `go:embed`, used for the window,
+- `assets/`: `AppIcon`, a PNG embedded with `go:embed`, used for the window,
   taskbar, and tray. The old runtime load of `lunefetch.ico` failed twice over:
   the Linux installer does not ship the .ico beside the binary, and Go cannot
   decode the ICO container. `lunefetch.ico` is still used by the Windows
   installer for shortcuts.
-- `fatal/` — startup failures raised before the main window exists (config,
+- `fatal/`: startup failures raised before the main window exists (config,
   single instance, database, API token) are shown in a small fixed-size window
   rather than only logged, since a GUI binary has no attached terminal.
-- `theme/` — the dark-only moonlit palette and spacing/radius tokens.
+- `theme/`: the dark-only moonlit palette and spacing/radius tokens.
 
 ---
 
@@ -170,7 +170,7 @@ type Store interface {
     SetSort(col TableColumn, asc bool)
     Select(id int64)
 
-    // Mutations — Store updates its own state after each call
+    // Mutations: Store updates its own state after each call
     Add(req AddRequest)
     Pause(id int64)
     Resume(id int64)
@@ -181,8 +181,8 @@ type Store interface {
 ```
 
 Key decisions:
-- `DownloadStatus` is a typed constant, not a raw string — compile-time safety, no typos
-- `TableColumn` is an enum — same reason
+- `DownloadStatus` is a typed constant, not a raw string, for compile-time safety and no typos
+- `TableColumn` is an enum, for the same reason
 - `Refresh()` is not exposed; mutations auto-update internal state
 - `Load()` is for startup; `Reload()` is for explicit force-reload
 
@@ -255,8 +255,8 @@ Rationale: multiple chunks emit progress in parallel. Event-driven would spam th
 ## Guiding Principles
 
 1. UI only knows Store.
-2. Store is a facade — not a place for business logic.
+2. Store is a facade, not a place for business logic.
 3. Business logic lives in Core, Queue, and Storage.
-4. Refactor in phases — project must stay buildable and runnable after each phase.
+4. Refactor in phases: the project must stay buildable and runnable after each phase.
 5. Maintainability over feature count.
-6. YAGNI — don't add complexity before there is a real need.
+6. YAGNI: don't add complexity before there is a real need.

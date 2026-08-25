@@ -67,7 +67,7 @@ func (m *Manager) TryStart(id int64) (started bool, err error) {
 		return true, nil
 	}
 
-	// No slot available — put it at the end of the queue.
+	// No slot available, so put it at the end of the queue.
 	if err := m.enqueue(id); err != nil {
 		return false, err
 	}

@@ -70,5 +70,5 @@ func (n *Notifier) Send(title, body string) {
 		title,
 		body,
 	)
-	cmd.Run() //nolint:errcheck — best effort, failures are silent
+	cmd.Run() //nolint:errcheck // best effort, failures are silent
 }

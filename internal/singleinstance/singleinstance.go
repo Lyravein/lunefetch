@@ -56,7 +56,7 @@ func (l *Lock) Release() {
 	if l == nil || l.file == nil {
 		return
 	}
-	unlockFile(l.file) //nolint:errcheck — the fd is closed next regardless
+	unlockFile(l.file) //nolint:errcheck // the fd is closed next regardless
 	l.file.Close()
 	l.file = nil
 }

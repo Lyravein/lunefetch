@@ -190,13 +190,13 @@ func TestPerDownloadLimiterIsolation(t *testing.T) {
 
 	// Yang dibatasi harus mendekati 1 detik (128 KiB / 128 KiB/s).
 	if durs["limited"] < 700*time.Millisecond {
-		t.Errorf("download berlimit selesai %v, terlalu cepat — throttle tidak jalan", durs["limited"])
+		t.Errorf("download berlimit selesai %v, terlalu cepat, throttle tidak jalan", durs["limited"])
 	}
 	// Compare against the throttled peer instead of an absolute wall-clock
 	// cutoff. A loaded Windows runner can make an unthrottled local transfer take
 	// 600ms+, which is still clearly faster than the 1s throttled transfer but
 	// failed the old 400ms assertion.
 	if durs["free"] >= durs["limited"]*3/4 {
-		t.Errorf("download tanpa limit selesai %v vs limited %v — limiter bocor ke download lain", durs["free"], durs["limited"])
+		t.Errorf("download tanpa limit selesai %v vs limited %v, limiter bocor ke download lain", durs["free"], durs["limited"])
 	}
 }

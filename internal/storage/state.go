@@ -120,7 +120,7 @@ func (sm *StateManager) migrate() error {
 		`ALTER TABLE downloads ADD COLUMN last_modified TEXT`,
 	}
 	for _, m := range additive {
-		sm.db.Exec(m) //nolint:errcheck — "duplicate column" error is expected on fresh DBs
+		sm.db.Exec(m) //nolint:errcheck // "duplicate column" error is expected on fresh DBs
 	}
 
 	schema := `
@@ -741,7 +741,7 @@ func (sm *StateManager) DeleteWithFile(id int64) error {
 		return err
 	}
 
-	// Reset chunk progress — file sudah tidak ada, progress lama tidak valid.
+	// Reset chunk progress: file sudah tidak ada, progress lama tidak valid.
 	if _, err := tx.Exec(
 		`UPDATE chunks SET downloaded_size = 0, status = 'pending', updated_at = CURRENT_TIMESTAMP
 		 WHERE download_id = ?`,

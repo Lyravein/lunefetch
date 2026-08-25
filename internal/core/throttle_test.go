@@ -119,7 +119,7 @@ func TestLimiterSustainedRate(t *testing.T) {
 	elapsed := time.Since(start)
 
 	actual := float64(total) / elapsed.Seconds()
-	// Toleransi 35% di atas rate — burst awal mempercepat sedikit.
+	// Toleransi 35% di atas rate, karena burst awal mempercepat sedikit.
 	if actual > rate*1.35 {
 		t.Errorf("sustained rate %.0f B/s exceeds limit %d B/s by too much",
 			actual, rate)

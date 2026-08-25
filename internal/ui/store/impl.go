@@ -12,7 +12,7 @@ import (
 var _ Store = (*DownloadStore)(nil)
 
 // Mutator is the interface that DownloadStore delegates mutations to.
-// Implemented by pages.DownloadsPage — kept as an interface so Store
+// Implemented by pages.DownloadsPage, kept as an interface so Store
 // does not import the pages package (would create a cycle).
 type Mutator interface {
 	StartDownload(id int64)
