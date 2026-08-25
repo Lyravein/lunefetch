@@ -262,13 +262,27 @@ Otherwise a download can be intercepted using defaults after the user disabled
 interception.
 
 ### 14. Extension: Validate Message Senders
-`runtime.onMessage` checks `sender.id`, rejects any `sender.tab`, and compares
-origins. Without it a web page that learns the extension id could queue
-downloads or rewrite settings.
+`runtime.onMessage` checks `sender.id` and requires the sender URL to be under
+`runtime.getURL("")`. Without it a web page that learns the extension id could
+queue downloads or rewrite settings. Do NOT reject every sender carrying a tab:
+an extension page opened in a tab (options.html, batch.html) legitimately has
+`sender.tab` in Chromium, and rejecting it left those pages with no state.
 
 ### 15. Extension: `contextMenus.create` Is Not Idempotent
 It throws on a duplicate id, and the worker re-runs the whole file on restart.
 Call `removeAll` first (see `createContextMenus`).
+
+### 15b. Extension: Filter webRequest By Request Type
+`onHeadersReceived` must be registered with `types:
+[...INTERCEPTABLE_REQUEST_TYPES]` and re-check `isInterceptableRequestType`
+inside the handler. Registered for every type, it saw a page's own XHRs,
+beacons, and keep-alive pings, and response headers cannot distinguish them:
+`youtube.com/sw.js_data` is an internal fetch that really does send
+`Content-Disposition: attachment`. Never widen this back to all types.
+
+Related: read a file extension with `extensionOf`, not `split(".").pop()`. The
+latter returns the whole string when there is no dot, so any dotless path was
+compared against the rule set in full.
 
 ### 16. Windows Is A First-Class Target
 Anything platform-specific needs a Windows path, not just a Unix one:

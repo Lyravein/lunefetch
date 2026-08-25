@@ -7,8 +7,10 @@ import {
   isDownloadFilename,
   isDownloadMime,
   isDownloadMimeValue,
+  INTERCEPTABLE_REQUEST_TYPES,
   isDownloadURL,
   isHTTPURL,
+  isInterceptableRequestType,
   normalizeSettings,
   normalizeSiteRule,
   shouldAutomaticallyIntercept,
@@ -190,6 +192,10 @@ if (isFirefox && ext.webRequest) {
   ext.webRequest.onHeadersReceived.addListener(
     async (details) => {
       if (details.method !== "GET" || !isHTTPURL(details.url)) return {};
+      // Background traffic is not a user download. Without this check every
+      // XHR, beacon, and keep-alive ping on every page reached the header
+      // inspection below, and some of them do send Content-Disposition.
+      if (!isInterceptableRequestType(details.type)) return {};
       await ready();
       const headers = details.responseHeaders || [];
       const disposition = (headers.find((header) => header.name.toLowerCase() === "content-disposition")?.value || "").toLowerCase();
@@ -202,7 +208,7 @@ if (isFirefox && ext.webRequest) {
       await notify(result, details.url);
       return result.success ? { cancel: true } : {};
     },
-    { urls: ["<all_urls>"] },
+    { urls: ["<all_urls>"], types: [...INTERCEPTABLE_REQUEST_TYPES] },
     ["blocking", "responseHeaders"],
   );
 }

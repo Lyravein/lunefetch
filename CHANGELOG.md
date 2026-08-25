@@ -4,6 +4,23 @@ Released versions track the `VERSION` file. Sections labelled `Phase N` predate
 that convention: they are development milestones, not releases, and are kept for
 historical reference.
 
+## [1.1.2] - 2026-08-25
+
+### Fixed
+- **The extension intercepted a page's own background traffic.** The Firefox
+  listener was registered for every request type, so any XHR, beacon, or
+  keep-alive ping whose response looked download-like was handed to Lunefetch.
+  Reported cases included `youtube.com/sw.js_data`, an internal fetch that really
+  does answer with `Content-Disposition: attachment`, and a Google Sheets
+  keep-alive ping. Interception is now limited to navigations and link
+  downloads (`main_frame`, `sub_frame`, `object`, `other`); the noisy types are
+  excluded at registration, so they no longer wake the background worker at all.
+- **A path with no extension matched file rules.** The extension was read with
+  `split(".").pop()`, which returns the whole string when there is no dot, so
+  `/spreadsheets/d/abc/hibernatestat` was compared against the rule set in full
+  and a bare name like `zip` matched the zip rule. An extension is now only
+  recognized after a real dot, and a leading dot is treated as a hidden file.
+
 ## [1.1.1] - 2026-08-24
 
 ### Fixed

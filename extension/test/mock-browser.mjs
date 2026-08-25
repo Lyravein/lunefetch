@@ -3,10 +3,14 @@ import { OUTCOMES } from "../src/core.mjs";
 export class MockEvent {
   constructor() {
     this.listeners = [];
+    // Registration arguments of the most recent addListener call, so a test can
+    // assert the filter an event was registered with (webRequest types).
+    this.filters = [];
   }
 
-  addListener(listener) {
+  addListener(listener, ...filters) {
     this.listeners.push(listener);
+    this.filters.push(filters);
   }
 
   async emit(...args) {

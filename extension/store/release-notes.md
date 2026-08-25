@@ -1,5 +1,9 @@
 # Lunefetch {{VERSION}}
 
+- Fixed: only real downloads are intercepted. Background requests a page makes on
+  its own, such as analytics pings and internal data fetches, are ignored even
+  when their response headers look like a file.
+- Fixed: an address with no file extension no longer matches your file rules.
 - MV3 fix: interception now always respects your current settings, even after the
   background worker restarts.
 - Only the extension's own pages can queue downloads or change settings.

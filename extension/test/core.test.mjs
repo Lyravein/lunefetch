@@ -7,9 +7,12 @@ import {
   createBrowserAdapter,
   createHandoffController,
   diagnosticFor,
+  extensionOf,
+  isDownloadFilename,
   isDownloadMime,
   isDownloadURL,
   isHTTPURL,
+  isInterceptableRequestType,
   normalizeSettings,
   normalizeNativeResult,
   normalizeDownloadHint,
@@ -212,4 +215,38 @@ test("preserves Firefox's duplicate browser event if cancellation fails", async 
   const outcome = await controller.handleCreated({ id: 4, url: "https://example.com/file.zip" });
   assert.equal(outcome.deduplicated, true);
   assert.equal(outcome.preserved, true);
+});
+
+// `split(".").pop()` returns the whole string when there is no dot, so a path
+// such as /spreadsheets/d/abc/hibernatestat was compared against the rule set
+// in its entirety, and a bare name like "zip" matched the zip rule.
+test("an extension is only recognized after a real dot", () => {
+  assert.equal(extensionOf("/file.zip"), "zip");
+  assert.equal(extensionOf("/a/b/archive.tar.gz"), "gz");
+  assert.equal(extensionOf("/x.ZIP"), "zip");
+
+  assert.equal(extensionOf("/spreadsheets/d/abc/hibernatestat"), "");
+  assert.equal(extensionOf("/sw.js_data"), "js_data");
+  assert.equal(extensionOf("/zip"), "");
+  assert.equal(extensionOf("/.zip"), "");
+  assert.equal(extensionOf("/name."), "");
+  assert.equal(extensionOf(""), "");
+
+  assert.equal(isDownloadFilename("release.zip"), true);
+  assert.equal(isDownloadFilename("zip"), false);
+  assert.equal(isDownloadURL("https://www.youtube.com/sw.js_data"), false);
+  assert.equal(isDownloadURL("https://docs.google.com/spreadsheets/d/abc/hibernatestat?event=PING"), false);
+});
+
+test("only user-facing request types are interceptable", () => {
+  for (const type of ["main_frame", "sub_frame", "object", "other"]) {
+    assert.equal(isInterceptableRequestType(type), true, type);
+  }
+  for (const type of ["xmlhttprequest", "script", "image", "imageset", "stylesheet", "font",
+    "ping", "beacon", "websocket", "media", "csp_report", "speculative"]) {
+    assert.equal(isInterceptableRequestType(type), false, type);
+  }
+  // A browser that omits the type must not be silently ignored.
+  assert.equal(isInterceptableRequestType(undefined), true);
+  assert.equal(isInterceptableRequestType(""), true);
 });

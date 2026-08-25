@@ -159,3 +159,88 @@ test("blob and data downloads are excluded before native handoff", async () => {
   assert.deepEqual(nativeHost.calls, [{ action: "health" }]);
   assert.deepEqual(mock.calls.cancelled, []);
 });
+
+// A page's own background traffic is not a user download. These two real URLs
+// were reported hijacking the desktop app: youtube.com/sw.js_data is an internal
+// fetch that genuinely answers with "Content-Disposition: attachment", and the
+// Google Sheets hibernatestat call is a keep-alive ping. Header inspection alone
+// cannot tell either apart from a real download, so the request type must be
+// filtered first.
+test("background request types are never intercepted", async () => {
+  const nativeHost = createNativeHost(async () => accepted());
+  const mock = createMockBrowser({ firefox: true, nativeHost });
+  await loadBackground(mock, true);
+
+  const noise = [
+    {
+      type: "xmlhttprequest",
+      url: "https://www.youtube.com/sw.js_data",
+      responseHeaders: [
+        { name: "Content-Type", value: "application/json; charset=utf-8" },
+        { name: "Content-Disposition", value: 'attachment; filename="response.bin"' },
+      ],
+    },
+    {
+      type: "ping",
+      url: "https://docs.google.com/spreadsheets/d/abc/hibernatestat?event=HIBERNATE_PING",
+      responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }],
+    },
+    {
+      type: "script",
+      url: "https://cdn.example.com/app.js",
+      responseHeaders: [{ name: "Content-Disposition", value: "attachment" }],
+    },
+    {
+      type: "image",
+      url: "https://cdn.example.com/pixel.png",
+      responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }],
+    },
+    {
+      type: "beacon",
+      url: "https://analytics.example.com/collect",
+      responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }],
+    },
+  ];
+
+  for (const request of noise) {
+    const [decision] = await mock.api.webRequest.onHeadersReceived.emit({
+      method: "GET",
+      ...request,
+    });
+    assert.deepEqual(decision, {}, `${request.type} ${request.url} was intercepted`);
+  }
+
+  assert.deepEqual(nativeHost.calls, [{ action: "health" }], "a background request reached the native host");
+});
+
+test("a navigation to a real download is still intercepted", async () => {
+  const nativeHost = createNativeHost(async () => accepted());
+  const mock = createMockBrowser({ firefox: true, nativeHost });
+  await loadBackground(mock, true);
+
+  const [decision] = await mock.api.webRequest.onHeadersReceived.emit({
+    method: "GET",
+    type: "main_frame",
+    url: "https://downloads.example.com/tool.iso",
+    responseHeaders: [{ name: "Content-Type", value: "application/octet-stream" }],
+  });
+
+  assert.deepEqual(decision, { cancel: true });
+  assert.equal(nativeHost.calls.filter((call) => call.action === "download").length, 1);
+});
+
+// Filtering inside the handler protects the tests; registering the same filter
+// with the browser means the noisy requests never wake the worker at all.
+test("the webRequest listener is registered with a request-type filter", async () => {
+  const mock = createMockBrowser({ firefox: true, nativeHost: createNativeHost(async () => accepted()) });
+  await loadBackground(mock, true);
+
+  const [filter] = mock.api.webRequest.onHeadersReceived.filters;
+  assert.ok(filter, "onHeadersReceived was registered without a filter");
+  const [match] = filter;
+  assert.ok(Array.isArray(match.types), "no types filter was supplied");
+  assert.ok(match.types.includes("main_frame"), "main_frame must stay eligible");
+  for (const noisy of ["xmlhttprequest", "script", "image", "ping", "beacon", "stylesheet", "websocket"]) {
+    assert.ok(!match.types.includes(noisy), `${noisy} must not be registered`);
+  }
+});

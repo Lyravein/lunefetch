@@ -10,7 +10,7 @@
 | `activeTab` | Identify the current site for the one-hour bypass control in the popup. |
 | `scripting` | Collect page links for the “Download all with Lunefetch” confirmation list, only when that menu item is used. |
 | `<all_urls>` | Detect eligible downloads and apply configured site rules across sites. Non-HTTP(S) URLs are rejected. |
-| Firefox `webRequest` / `webRequestBlocking` | Stop an eligible Firefox response only after Lunefetch has accepted its URL, avoiding duplicate browser downloads. |
+| Firefox `webRequest` / `webRequestBlocking` | Stop an eligible Firefox response only after Lunefetch has accepted its URL, avoiding duplicate browser downloads. Registered only for navigations and link downloads, so a page's own background requests are never inspected. |
 
 Firefox declares required `browsingActivity` data handling because download
 URLs are transferred outside the extension to the locally installed Lunefetch

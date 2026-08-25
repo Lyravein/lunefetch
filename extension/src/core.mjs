@@ -16,6 +16,31 @@ export const DOWNLOAD_EXTENSIONS = new Set([
   "docx", "xls", "xlsx", "ppt", "pptx",
 ]);
 
+// Request types eligible for automatic interception: a user navigating to a
+// resource, or a link/anchor download. Background traffic a page generates on
+// its own (xmlhttprequest, ping, beacon, script, image, media, websocket) is
+// never a user download, and a modern page emits dozens of those a minute.
+//
+// Filtering on type is what keeps requests like youtube.com/sw.js_data out —
+// that is an internal fetch, yet it really does answer with
+// "Content-Disposition: attachment", so header inspection alone cannot tell it
+// apart from a genuine download.
+export const INTERCEPTABLE_REQUEST_TYPES = new Set([
+  "main_frame",
+  "sub_frame",
+  "object",
+  "object_subrequest",
+  "other",
+]);
+
+// isInterceptableRequestType reports whether a webRequest details.type may be
+// considered for handoff. An absent type is treated as eligible so a browser
+// that omits it is not silently ignored.
+export function isInterceptableRequestType(type) {
+  if (type === undefined || type === null || type === "") return true;
+  return INTERCEPTABLE_REQUEST_TYPES.has(String(type));
+}
+
 export const DOWNLOAD_MIME_TYPES = new Set([
   "application/zip", "application/x-rar-compressed", "application/x-7z-compressed",
   "application/x-tar", "application/gzip", "application/x-bzip2", "application/x-xz",
@@ -157,9 +182,20 @@ export function isDownloadURL(raw, extensions = DOWNLOAD_EXTENSIONS) {
 }
 
 export function isDownloadFilename(filename, extensions = DOWNLOAD_EXTENSIONS) {
-  const pathname = String(filename).toLowerCase();
   const rules = extensions instanceof Set ? extensions : new Set(extensions);
-  return rules.has(pathname.split(".").pop());
+  return rules.has(extensionOf(filename));
+}
+
+// extensionOf returns the lowercased extension of a path's last segment, or ""
+// when there is none. `split(".").pop()` used to be enough, but on a name with
+// no dot it returns the whole string, so a path like "/spreadsheets/d/x/stat"
+// matched any rule that happened to equal it.
+export function extensionOf(filename) {
+  const segment = String(filename).toLowerCase().split(/[/\\]/).pop();
+  const dot = segment.lastIndexOf(".");
+  // A leading dot is a hidden file, not an extension.
+  if (dot <= 0 || dot === segment.length - 1) return "";
+  return segment.slice(dot + 1);
 }
 
 export function isDownloadMime(headers = [], mimeTypes = DOWNLOAD_MIME_TYPES) {
