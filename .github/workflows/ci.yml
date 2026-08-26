@@ -27,7 +27,7 @@ jobs:
       - name: Build
         run: go build ./...
       - name: Validate installer and package extensions
-        run: bash -n install.sh && bash -n scripts/check-version.sh && bash -n scripts/test-install-linux.sh
+        run: bash -n scripts/install-native-host.sh && bash -n scripts/check-version.sh && bash -n scripts/test-install-linux.sh
       - name: Linux install lifecycle smoke test
         run: scripts/test-install-linux.sh
 
