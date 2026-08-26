@@ -15,7 +15,7 @@ application-menu shortcut, native host, and manifests for detected browsers.
 Administrator access is not required. Run `~/.local/opt/lunefetch/uninstall` to
 remove the application and native-host integration.
 
-Developers using a source checkout can run `./install.sh` to build only the
+Developers using a source checkout can run `./scripts/install-native-host.sh` to build only the
 native host and install manifests for detected browsers. Use `--firefox` or
 `--chromium` to limit the browser family and `--uninstall` to remove that
 developer installation.
@@ -44,7 +44,7 @@ registers native messaging for every supported browser. Administrator access
 is not required. Lunefetch can be removed from Windows **Installed apps**.
 
 Developers can instead run
-`powershell -ExecutionPolicy Bypass -File .\install-windows.ps1`. Use
+`powershell -ExecutionPolicy Bypass -File .\scripts\install-native-host.ps1`. Use
 `-Browser Firefox` or `-Browser Chromium` to limit native-host registration,
 and `-Uninstall` to remove the developer-installed binary, manifests, and
 registry entries.

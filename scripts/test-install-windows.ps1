@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Installer = Join-Path $Root "install-windows.ps1"
+$Installer = Join-Path $PSScriptRoot "install-native-host.ps1"
 $InstallDir = Join-Path $env:LOCALAPPDATA "Lunefetch"
 $RegistryPaths = @(
     "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.lyravein.lunefetch",

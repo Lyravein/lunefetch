@@ -117,7 +117,7 @@ Supporting packages:
 - `assets/`: `AppIcon`, a PNG embedded with `go:embed`, used for the window,
   taskbar, and tray. The old runtime load of `lunefetch.ico` failed twice over:
   the Linux installer does not ship the .ico beside the binary, and Go cannot
-  decode the ICO container. `lunefetch.ico` is still used by the Windows
+  decode the ICO container. `installer/lunefetch.ico` is still used by the Windows
   installer for shortcuts.
 - `fatal/`: startup failures raised before the main window exists (config,
   single instance, database, API token) are shown in a small fixed-size window

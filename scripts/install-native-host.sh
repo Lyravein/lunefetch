@@ -1,10 +1,11 @@
 #!/bin/bash
-# install.sh: Install Lunefetch native messaging host for Firefox and/or Chromium-based browsers.
+# install-native-host.sh: Install the Lunefetch native messaging host for
+# Firefox and/or Chromium-based browsers from a source checkout.
 
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION")"
 BINARY_NAME="lunefetch-native-host"
 BINARY_DST="$HOME/.local/bin/$BINARY_NAME"
 
@@ -88,7 +89,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "Building native host binary..."
 mkdir -p "$(dirname "$BINARY_DST")"
-(cd "$SCRIPT_DIR" && go build -ldflags "-X main.version=$VERSION" -o "$BINARY_DST" ./cmd/native-host/)
+(cd "$ROOT_DIR" && go build -ldflags "-X main.version=$VERSION" -o "$BINARY_DST" ./cmd/native-host/)
 chmod +x "$BINARY_DST"
 echo "  -> $BINARY_DST"
 
@@ -145,8 +146,8 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo "Building extension packages..."
-chmod +x "$SCRIPT_DIR/extension/build.sh"
-"$SCRIPT_DIR/extension/build.sh"
+chmod +x "$ROOT_DIR/extension/build.sh"
+"$ROOT_DIR/extension/build.sh"
 
 # ---------------------------------------------------------------------------
 # Done

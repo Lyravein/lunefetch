@@ -41,7 +41,7 @@ The extension needs both the desktop application and its native messaging host.
 The platform installers register the host for you. From a source checkout:
 
 ```bash
-./install.sh --firefox
+./scripts/install-native-host.sh --firefox
 ```
 
 Firefox treats this extension's `<all_urls>` access as optional. If you decline

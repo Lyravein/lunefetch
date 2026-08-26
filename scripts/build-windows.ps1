@@ -27,7 +27,7 @@ try {
     Pop-Location
 }
 
-Copy-Item (Join-Path $Root "lunefetch.ico") $StageDir -Force
+Copy-Item (Join-Path $Root "installer\lunefetch.ico") $StageDir -Force
 Copy-Item (Join-Path $Root "LICENSE") $StageDir -Force
 
 if (-not $ISCC) {

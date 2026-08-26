@@ -2,14 +2,14 @@
 
 ## Current Focus
 
-1.1.0 is released. The remaining work before the next release is manual Windows
-verification: row action menus, installer lifecycle, and DPI scaling at 100%,
-125%, and 150%. None of it has run on real Windows hardware; CI covers the build
-and the test suite only.
+1.1.4 is released. The remaining work is verification that needs a human rather
+than CI: Windows DPI scaling at 100%, 125%, and 150%, tray rendering, and the
+Firefox optional-permission flow. None of it has run on real hardware; CI covers
+the build, the test suite, and the installer lifecycle only.
 
-See [CHANGELOG.md](CHANGELOG.md) for what shipped,
-[docs/ui-redesign-plan.md](docs/ui-redesign-plan.md) for the UI design record,
-and [ARCHITECTURE.md](ARCHITECTURE.md) for layering rules.
+See [../CHANGELOG.md](../CHANGELOG.md) for what shipped,
+[ui-redesign-plan.md](ui-redesign-plan.md) for the UI design record, and
+[architecture.md](architecture.md) for layering rules.
 
 ---
 
@@ -172,7 +172,7 @@ Everything needed to use Lunefetch comfortably day-to-day.
 
 ## v1.1: UX Improvements
 
-Released 2026-08-22. See [CHANGELOG.md](CHANGELOG.md) for the full entry.
+Released 2026-08-22. See [../CHANGELOG.md](../CHANGELOG.md) for the full entry.
 
 - [x] Context menu (row actions): Pause, Resume, Cancel, Open File, Open Folder, Copy URL, Remove
 - [x] Progress bar visualization in the download list

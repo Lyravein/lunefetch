@@ -28,7 +28,7 @@ go.work
 # Downloaded files
 downloads/
 
-# Local source artwork (the optimized app icon is lunefetch.ico)
+# Local source artwork (the optimized app icon is installer/lunefetch.ico)
 lunefetch.png
 
 # Extension build output
@@ -42,6 +42,7 @@ extension/node_modules/
 .vscode/
 .idea/
 .claude/
+.opencode/
 *.swp
 *.swo
 *~

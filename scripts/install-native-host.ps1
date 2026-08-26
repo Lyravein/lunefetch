@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = $PSScriptRoot
+$Root = Split-Path -Parent $PSScriptRoot
 $Version = (Get-Content (Join-Path $Root "VERSION") -Raw).Trim()
 $InstallDir = Join-Path $env:LOCALAPPDATA "Lunefetch"
 $BinaryPath = Join-Path $InstallDir "lunefetch-native-host.exe"

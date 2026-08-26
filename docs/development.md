@@ -29,8 +29,19 @@ extension/
 └── store/           # Listing copy, privacy and permission rationale
 ```
 
+The repository root holds only what a reader or a build needs to find
+immediately: `main.go`, the Go module files, `VERSION`, the licence, and the
+top-level Markdown. Everything else is grouped by purpose.
+
+```
+cmd/native-host/     # Browser native messaging host binary
+installer/           # Inno Setup script and the Windows app icon
+scripts/             # Build, install, and lifecycle-test scripts
+docs/                # This file and its siblings
+```
+
 Layering rules and design decisions are in
-[../ARCHITECTURE.md](../ARCHITECTURE.md). Conventions and known pitfalls worth
+[architecture.md](architecture.md). Conventions and known pitfalls worth
 reading before changing anything are in [../AGENTS.md](../AGENTS.md).
 
 ## Desktop tests
@@ -52,6 +63,13 @@ Installer lifecycle, covering install, upgrade, and uninstall:
 
 ```bash
 bash scripts/test-install-linux.sh
+```
+
+To register only the native messaging host from a checkout, without building an
+installer:
+
+```bash
+./scripts/install-native-host.sh --firefox
 ```
 
 Windows-only code paths cross-compile without a Windows machine. The GUI packages

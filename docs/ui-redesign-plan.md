@@ -286,7 +286,7 @@ Acceptance criteria:
 
 ### Documentation closeout
 
-- [x] Update `ROADMAP.md` and `ARCHITECTURE.md` entries that defer the theme system.
+- [x] Update `docs/roadmap.md` and `docs/architecture.md` entries that defer the theme system.
 - [x] Update `AGENTS.md` examples and UI references after implementations move.
 - Update release notes/changelog only when the redesign is prepared for release.
 

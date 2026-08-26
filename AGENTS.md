@@ -249,7 +249,7 @@ error (config, single-instance, database, API token). It logs and shows a
 floating window.
 
 ### 12. Icons Come From `internal/ui/assets`
-`assets.AppIcon` is an embedded PNG. Do NOT load `lunefetch.ico` at runtime: the
+`assets.AppIcon` is an embedded PNG. Do NOT load `installer/lunefetch.ico` at runtime: the
 installer never ships it next to the binary, and Go's image decoders cannot read
 the ICO container, so both window and tray icons render blank.
 
