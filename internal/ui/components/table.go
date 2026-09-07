@@ -151,6 +151,7 @@ func newDownloadRow() *downloadRow {
 	r.name.TextStyle = fyne.TextStyle{Bold: true}
 	r.name.Truncation = fyne.TextTruncateEllipsis
 	r.meta.Importance = widget.LowImportance
+	r.status.TextStyle = fyne.TextStyle{Bold: true}
 	r.status.Importance = widget.MediumImportance
 	r.speed.Importance = widget.LowImportance
 	r.eta.Importance = widget.LowImportance
@@ -175,6 +176,9 @@ func (p *compactProgress) SetValue(value float64) {
 		value = 0
 	} else if value > 1 {
 		value = 1
+	}
+	if p.Value == value {
+		return
 	}
 	p.Value = value
 	p.Refresh()
@@ -367,41 +371,54 @@ func NewDownloadTable(onSort func(store.TableColumn, bool), onSelect func(int64)
 	return dt
 }
 
+func setLabelText(label *widget.Label, text string) {
+	if label.Text != text {
+		label.SetText(text)
+	}
+}
+
 func (dt *DownloadTable) updateRow(id widget.ListItemID, row *downloadRow) {
 	if id >= len(dt.records) {
 		return
 	}
 	rec := dt.records[id]
 	if dt.multiHandler.mode {
-		row.check.Show()
-	} else {
+		if row.check.Hidden {
+			row.check.Show()
+		}
+	} else if !row.check.Hidden {
 		row.check.Hide()
 	}
-	row.icon.SetResource(fileIcon(rec.Filename))
-	row.name.SetText(rec.Filename)
-	row.meta.SetText(rowMetaText(rec))
+	icon := fileIcon(rec.Filename)
+	if row.icon.Resource == nil || row.icon.Resource.Name() != icon.Name() {
+		row.icon.SetResource(icon)
+	}
+	setLabelText(row.name, rec.Filename)
+	setLabelText(row.meta, rowMetaText(rec))
 	row.progress.SetValue(progressOf(rec))
-	row.status.SetText(statusText(rec.Status))
-	row.status.TextStyle = fyne.TextStyle{Bold: true}
-	row.status.Importance = widget.MediumImportance
-	row.speed.SetText("")
-	row.eta.SetText("")
+	setLabelText(row.status, statusText(rec.Status))
+
+	speedText, etaText := "", ""
 	if speed := dt.speeds[rec.ID]; speed > 0 {
-		row.speed.SetText(FormatSize(int64(speed)) + "/s")
+		speedText = FormatSize(int64(speed)) + "/s"
 		remaining := rec.TotalSize - rec.DownloadedSize
 		if remaining > 0 {
-			row.eta.SetText("ETA " + formatDuration(time.Duration(float64(remaining)/speed)*time.Second))
+			etaText = "ETA " + formatDuration(time.Duration(float64(remaining)/speed)*time.Second)
 		}
 	}
+	setLabelText(row.speed, speedText)
+	setLabelText(row.eta, etaText)
 	row.check.OnChanged = nil
-	row.check.SetChecked(dt.multiHandler.isSelected(rec.ID))
+	selected := dt.multiHandler.isSelected(rec.ID)
+	if row.check.Checked != selected {
+		row.check.SetChecked(selected)
+	}
 	row.check.OnChanged = func(checked bool) {
 		if checked != dt.multiHandler.isSelected(rec.ID) {
 			dt.multiHandler.toggle(rec.ID)
 		}
 	}
 	row.actions.OnTapped = func() { dt.showRowMenu(rec, row.actions) }
-	row.status.Refresh()
 	row.Refresh()
 }
 
@@ -491,8 +508,17 @@ func (dt *DownloadTable) applySort(col store.TableColumn, asc bool) {
 }
 
 func (dt *DownloadTable) SetRecords(records []*storage.DownloadRecord) {
+	dt.SetData(records, nil)
+}
+
+// SetData replaces records and speeds in a single UI pass so callers doing
+// both do not trigger two widget.List refreshes per tick.
+func (dt *DownloadTable) SetData(records []*storage.DownloadRecord, speeds map[int64]float64) {
 	fyne.Do(func() {
 		dt.records = records
+		if speeds != nil {
+			dt.speeds = speeds
+		}
 		valid := make(map[int64]bool, len(records))
 		for i, rec := range records {
 			valid[rec.ID] = true
@@ -553,16 +579,16 @@ func (dt *DownloadTable) rowMenuItems(rec *storage.DownloadRecord) []*fyne.MenuI
 			}
 		}
 		items = append(items,
-			fyne.NewMenuItem("Pause selected", fireSelected("pause")),
-			fyne.NewMenuItem("Resume selected", fireSelected("resume")),
-			fyne.NewMenuItem("Cancel selected", func() {
+			fyne.NewMenuItemWithIcon("Pause selected", theme.MediaPauseIcon(), fireSelected("pause")),
+			fyne.NewMenuItemWithIcon("Resume selected", theme.MediaPlayIcon(), fireSelected("resume")),
+			fyne.NewMenuItemWithIcon("Cancel selected", theme.CancelIcon(), func() {
 				if dt.onBulkAction != nil {
 					dt.onBulkAction(selectedIDs, "cancel")
 				}
 				dt.multiHandler.clearSelection()
 				dt.list.Refresh()
 			}),
-			fyne.NewMenuItem("Remove selected", func() {
+			fyne.NewMenuItemWithIcon("Remove selected", theme.DeleteIcon(), func() {
 				if dt.onBulkAction != nil {
 					dt.onBulkAction(selectedIDs, "delete")
 				}
@@ -574,38 +600,44 @@ func (dt *DownloadTable) rowMenuItems(rec *storage.DownloadRecord) []*fyne.MenuI
 	}
 	switch rec.Status {
 	case "downloading":
-		items = append(items, fyne.NewMenuItem("Pause", fire("pause")), fyne.NewMenuItem("Cancel", fire("cancel")))
+		items = append(items,
+			fyne.NewMenuItemWithIcon("Pause", theme.MediaPauseIcon(), fire("pause")),
+			fyne.NewMenuItemWithIcon("Cancel", theme.CancelIcon(), fire("cancel")),
+		)
 	case "completed":
 		// Open File opens the file. Re-fetching is a separate, destructive
 		// action with its own confirmation; it must never be what a user gets
 		// when they ask to open something.
 		items = append(items,
-			fyne.NewMenuItem("Open File", fire("open_file")),
-			fyne.NewMenuItem("Download Again…", fire("download_again")),
+			fyne.NewMenuItemWithIcon("Open File", theme.FileIcon(), fire("open_file")),
+			fyne.NewMenuItemWithIcon("Download Again…", theme.ViewRefreshIcon(), fire("download_again")),
 		)
 	case "cancelled":
 		items = append(items,
-			fyne.NewMenuItem("Download Again…", fire("download_again")),
-			fyne.NewMenuItem("Cancel", fire("cancel")),
+			fyne.NewMenuItemWithIcon("Download Again…", theme.ViewRefreshIcon(), fire("download_again")),
+			fyne.NewMenuItemWithIcon("Cancel", theme.CancelIcon(), fire("cancel")),
 		)
 	default:
-		items = append(items, fyne.NewMenuItem("Resume", fire("resume")), fyne.NewMenuItem("Cancel", fire("cancel")))
+		items = append(items,
+			fyne.NewMenuItemWithIcon("Resume", theme.MediaPlayIcon(), fire("resume")),
+			fyne.NewMenuItemWithIcon("Cancel", theme.CancelIcon(), fire("cancel")),
+		)
 	}
 	// Reordering only means something while a download is still waiting its turn.
 	if rec.Status == "queued" {
 		items = append(items,
 			fyne.NewMenuItemSeparator(),
-			fyne.NewMenuItem("Move Up in Queue", fire("queue_up")),
-			fyne.NewMenuItem("Move Down in Queue", fire("queue_down")),
+			fyne.NewMenuItemWithIcon("Move Up in Queue", theme.MoveUpIcon(), fire("queue_up")),
+			fyne.NewMenuItemWithIcon("Move Down in Queue", theme.MoveDownIcon(), fire("queue_down")),
 		)
 	}
 	items = append(items,
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Copy URL", func() { dt.window.Clipboard().SetContent(rec.URL) }),
-		fyne.NewMenuItem("Open Folder", fire("open_folder")),
-		fyne.NewMenuItem("Set Speed Limit…", func() { dt.showSpeedLimitDialog(rec) }),
+		fyne.NewMenuItemWithIcon("Copy URL", theme.ContentCopyIcon(), func() { dt.window.Clipboard().SetContent(rec.URL) }),
+		fyne.NewMenuItemWithIcon("Open Folder", theme.FolderOpenIcon(), fire("open_folder")),
+		fyne.NewMenuItemWithIcon("Set Speed Limit…", theme.SettingsIcon(), func() { dt.showSpeedLimitDialog(rec) }),
 		fyne.NewMenuItemSeparator(),
-		fyne.NewMenuItem("Remove from List", fire("delete")),
+		fyne.NewMenuItemWithIcon("Remove from List", theme.DeleteIcon(), fire("delete")),
 	)
 	return items
 }
@@ -619,7 +651,10 @@ func (dt *DownloadTable) showSpeedLimitDialog(rec *storage.DownloadRecord) {
 	if rec.SpeedLimit > 0 {
 		entry.SetText(strconv.FormatInt(rec.SpeedLimit/1024, 10))
 	}
-	dialog.ShowForm("Set Speed Limit", "Apply", "Cancel", []*widget.FormItem{widget.NewFormItem("KB/s", entry)}, func(ok bool) {
+	dialog.ShowForm("Set Speed Limit", "Apply", "Cancel", []*widget.FormItem{
+		widget.NewFormItem("Speed limit (KB/s)", entry),
+		widget.NewFormItem("Applies to", widget.NewLabel(rec.Filename)),
+	}, func(ok bool) {
 		if !ok {
 			return
 		}

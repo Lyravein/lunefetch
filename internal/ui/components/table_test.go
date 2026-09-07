@@ -218,3 +218,92 @@ func TestDownloadAgainOnlyOnFinishedRows(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactProgressSetValueClampsAndUpdates(t *testing.T) {
+	p := newCompactProgress()
+	p.SetValue(-0.5)
+	if p.Value != 0 {
+		t.Fatalf("SetValue(-0.5) = %v, want 0", p.Value)
+	}
+	p.SetValue(1.5)
+	if p.Value != 1 {
+		t.Fatalf("SetValue(1.5) = %v, want 1", p.Value)
+	}
+	p.SetValue(0.42)
+	if p.Value != 0.42 {
+		t.Fatalf("SetValue(0.42) = %v, want 0.42", p.Value)
+	}
+}
+
+// TestUpdateRowReusesExistingValues verifies that updateRow only writes
+// when the underlying value has changed. A download that is paused, queued,
+// or finished with a steady speed would otherwise rewrite every label and
+// icon on every 500ms tick.
+func TestUpdateRowReusesExistingValues(t *testing.T) {
+	dt := NewDownloadTable(nil, nil, nil, nil)
+	dt.records = []*storage.DownloadRecord{{
+		ID:             1,
+		Filename:       "ubuntu-24.04.iso",
+		TotalSize:      5_000_000_000,
+		DownloadedSize: 2_500_000_000,
+		Status:         "downloading",
+	}}
+	dt.speeds = map[int64]float64{1: 1_000_000}
+	row := newDownloadRow()
+	dt.updateRow(0, row)
+
+	// Snapshot of the current state, then apply identical data again.
+	prevName := row.name.Text
+	prevMeta := row.meta.Text
+	prevStatus := row.status.Text
+	prevSpeed := row.speed.Text
+	prevEta := row.eta.Text
+	prevIcon := row.icon.Resource
+	prevCheck := row.check.Checked
+	prevProgress := row.progress.Value
+
+	dt.updateRow(0, row)
+	if row.name.Text != prevName {
+		t.Fatalf("name rewritten: %q -> %q", prevName, row.name.Text)
+	}
+	if row.meta.Text != prevMeta {
+		t.Fatalf("meta rewritten: %q -> %q", prevMeta, row.meta.Text)
+	}
+	if row.status.Text != prevStatus {
+		t.Fatalf("status rewritten: %q -> %q", prevStatus, row.status.Text)
+	}
+	if row.speed.Text != prevSpeed {
+		t.Fatalf("speed rewritten: %q -> %q", prevSpeed, row.speed.Text)
+	}
+	if row.eta.Text != prevEta {
+		t.Fatalf("eta rewritten: %q -> %q", prevEta, row.eta.Text)
+	}
+	if row.icon.Resource != prevIcon {
+		t.Fatalf("icon replaced when filename unchanged")
+	}
+	if row.check.Checked != prevCheck {
+		t.Fatalf("check toggled when selection unchanged")
+	}
+	if row.progress.Value != prevProgress {
+		t.Fatalf("progress rewritten: %v -> %v", prevProgress, row.progress.Value)
+	}
+}
+
+// TestUpdateRowReactsToProgress ensures progress changes still get applied
+// even when most other fields are identical.
+func TestUpdateRowReactsToProgress(t *testing.T) {
+	dt := NewDownloadTable(nil, nil, nil, nil)
+	dt.records = []*storage.DownloadRecord{{
+		ID: 1, Filename: "f.bin", TotalSize: 1000, DownloadedSize: 100, Status: "downloading",
+	}}
+	row := newDownloadRow()
+	dt.updateRow(0, row)
+	if row.progress.Value != 0.1 {
+		t.Fatalf("first progress = %v, want 0.1", row.progress.Value)
+	}
+	dt.records[0].DownloadedSize = 750
+	dt.updateRow(0, row)
+	if row.progress.Value != 0.75 {
+		t.Fatalf("updated progress = %v, want 0.75", row.progress.Value)
+	}
+}
