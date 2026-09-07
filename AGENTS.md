@@ -1,7 +1,7 @@
 # Lunefetch Agent Guidelines
 
 This document provides guidance for AI agents working on the Lunefetch codebase.
-Current version: 1.1.0 (see `VERSION`; `scripts/check-version.sh` enforces that
+Current version: 0.1.0-beta (see `VERSION`; `scripts/check-version.sh` enforces that
 the extension manifests agree).
 
 ## Quick Reference
@@ -371,4 +371,4 @@ Use `go run -race` or `go test -race` to catch data races early.
 
 ---
 
-Last updated: 2026-08-23 (1.1.0 release: docs refresh, Windows parity, extension MV3 hardening, backend hardening)
+Last updated: 2026-09-07 (0.1.0-beta release prep: reset release series, backend and UI hardening, charcoal-teal theme)

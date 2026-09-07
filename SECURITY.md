@@ -3,7 +3,7 @@
 ## Supported Versions
 
 Security fixes are applied to the latest release and the default branch. The
-current release is 1.1.0.
+current release is 0.1.0-beta.
 
 ## Reporting a Vulnerability
 

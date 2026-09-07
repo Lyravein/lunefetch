@@ -4,6 +4,16 @@ Released versions track the `VERSION` file. Sections labelled `Phase N` predate
 that convention: they are development milestones, not releases, and are kept for
 historical reference.
 
+## [0.1.0-beta] - 2026-09-07
+
+### Changed
+- Reset the application release line while deeper backend and frontend
+  development continues.
+- Added a neutral charcoal UI palette with a restrained teal accent and
+  status-colored summary card indicators.
+- Expanded the desktop Settings dialog with download, performance, network,
+  history, notification, and system tray controls.
+
 ## [1.1.4] - 2026-08-25
 
 ### Fixed

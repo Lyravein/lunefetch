@@ -65,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           $Version = (Get-Content ./VERSION -Raw).Trim()
-          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne "v$Version") {
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -notmatch "^v$Version(-[0-9A-Za-z.-]+)?$") {
             throw "tag $env:GITHUB_REF_NAME does not match VERSION $Version"
           }
       - name: Build Windows installer

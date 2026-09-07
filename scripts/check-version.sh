@@ -18,9 +18,12 @@ for manifest in "$ROOT_DIR/extension/manifests/firefox.json" "$ROOT_DIR/extensio
   fi
 done
 
-if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_TYPE:-}" == "tag" && "$GITHUB_REF_NAME" != "v$VERSION" ]]; then
-  echo "Release tag $GITHUB_REF_NAME does not match VERSION v$VERSION" >&2
-  exit 1
+if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+  # Tags may carry a prerelease suffix (v0.1.0-beta for VERSION 0.1.0).
+  if [[ ! "$GITHUB_REF_NAME" =~ ^v$VERSION(-[0-9A-Za-z.-]+)?$ ]]; then
+    echo "Release tag $GITHUB_REF_NAME does not match VERSION v$VERSION" >&2
+    exit 1
+  fi
 fi
 
 echo "Version $VERSION is consistent."
