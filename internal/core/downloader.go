@@ -27,6 +27,13 @@ import (
 // burst maksimum limiter (lihat burstFor) supaya throttle langsung terasa.
 const readBufSize = 32 * 1024
 
+var bufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, readBufSize)
+		return &b
+	},
+}
+
 type Chunk struct {
 	Index      int
 	Start      int64
@@ -71,10 +78,10 @@ type Downloader struct {
 	active     int32
 	speedBuf   []int64
 	onProgress ProgressCallback
-	limiter    *Limiter // per-download, nil = unlimited
-	globalLim  *Limiter // shared across all downloads, nil = unlimited
-	proxyURL   string   // "" = no proxy
-	allowLocal bool     // true = permit LAN/loopback destinations
+	limiter    atomic.Pointer[Limiter] // per-download, nil = unlimited
+	globalLim  atomic.Pointer[Limiter] // shared across all downloads, nil = unlimited
+	proxyURL   string                  // "" = no proxy
+	allowLocal bool                    // true = permit LAN/loopback destinations
 	etag       string
 	modified   string
 	client     *http.Client
@@ -139,9 +146,7 @@ func (d *Downloader) SetProgressCallback(cb ProgressCallback) {
 // Bisa dipanggil kapan saja, termasuk saat download sedang berjalan.
 // Pass nil untuk unlimited.
 func (d *Downloader) SetLimiter(lim *Limiter) {
-	d.mu.Lock()
-	d.limiter = lim
-	d.mu.Unlock()
+	d.limiter.Store(lim)
 }
 
 // SetProxy mengatur proxy URL untuk downloader ini.
@@ -251,19 +256,9 @@ func (p addressPolicy) exempt(host string) bool {
 func newHTTPClient(proxyURL string, timeout time.Duration, allowLocal bool) *http.Client {
 	policy := addressPolicy{allowLocal: allowLocal}
 
-	transport := &http.Transport{
-		MaxIdleConns:          16,
-		MaxIdleConnsPerHost:   8,
-		IdleConnTimeout:       90 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-	}
-	if proxyURL != "" {
-		if u, err := url.Parse(proxyURL); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-			policy.proxyHost = u.Hostname()
-		}
-	}
-	transport.DialContext = policy.dialContext
+	// sharedTransport fills policy.proxyHost so the dialer exempts the
+	// user-configured proxy host from the destination policy.
+	transport := sharedTransport(proxyURL, allowLocal, &policy)
 
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
@@ -278,6 +273,53 @@ func newHTTPClient(proxyURL string, timeout time.Duration, allowLocal bool) *htt
 		return validateHTTPURL(req.Context(), req.URL, policy)
 	}
 	return client
+}
+
+// transportCache lets every client with the same (proxyURL, allowLocal) share a
+// single http.Transport. Without it, each new Downloader or GetFileInfo call
+// built an empty connection pool: chunk retries, the unknown-size branch, and
+// the HEAD probe all opened fresh TCP/TLS connections instead of reusing an
+// idle one. http.Transport is safe for concurrent use, so caching is fine;
+// addressPolicy is per-transport because the same proxy is exempt.
+var transportCache sync.Map // key string -> *http.Transport
+
+func transportKey(proxyURL string, allowLocal bool) string {
+	if proxyURL == "" {
+		if allowLocal {
+			return "local"
+		}
+		return "public"
+	}
+	return proxyURL + "|" + boolStr(allowLocal)
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}
+
+func sharedTransport(proxyURL string, allowLocal bool, policy *addressPolicy) *http.Transport {
+	key := transportKey(proxyURL, allowLocal)
+	if v, ok := transportCache.Load(key); ok {
+		return v.(*http.Transport)
+	}
+	transport := &http.Transport{
+		MaxIdleConns:          32,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	}
+	if proxyURL != "" {
+		if u, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(u)
+			policy.proxyHost = u.Hostname()
+		}
+	}
+	transport.DialContext = policy.dialContext
+	actual, _ := transportCache.LoadOrStore(key, transport)
+	return actual.(*http.Transport)
 }
 
 type safeRoundTripper struct {
@@ -359,9 +401,7 @@ func validateHTTPURL(ctx context.Context, u *url.URL, policy addressPolicy) erro
 // Karena limiter ini dibagi, total bandwidth semua download akan dibatasi
 // bersama-sama. Pass nil untuk unlimited.
 func (d *Downloader) SetGlobalLimiter(lim *Limiter) {
-	d.mu.Lock()
-	d.globalLim = lim
-	d.mu.Unlock()
+	d.globalLim.Store(lim)
 }
 
 // emitProgress invokes the progress callback if set. Must be called without
@@ -636,14 +676,14 @@ func (d *Downloader) startUnknownSize(ctx context.Context) error {
 		return fmt.Errorf("truncate file: %w", err)
 	}
 
+	bufPtr := bufPool.Get().(*[]byte)
+	defer bufPool.Put(bufPtr)
+	buf := *bufPtr
 	var total int64
-	buf := make([]byte, readBufSize)
 	for {
 		n, readErr := resp.Body.Read(buf)
 		if n > 0 {
-			d.mu.RLock()
-			lim, glim := d.limiter, d.globalLim
-			d.mu.RUnlock()
+			lim, glim := d.limiter.Load(), d.globalLim.Load()
 			if glim != nil {
 				if err := glim.Wait(ctx, n); err != nil {
 					return err
@@ -819,7 +859,9 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 		return fmt.Errorf("content length mismatch: got %d, want %d", resp.ContentLength, expected)
 	}
 
-	buf := make([]byte, readBufSize)
+	bufPtr := bufPool.Get().(*[]byte)
+	defer bufPool.Put(bufPtr)
+	buf := *bufPtr
 	written := start
 	chunkDownloaded := downloaded
 	remaining := expected
@@ -838,9 +880,7 @@ func (d *Downloader) downloadChunk(ctx context.Context, ch Chunk) error {
 		if n > 0 {
 			// Throttle jika limiter aktif. Tunggu global dulu lalu per-download;
 			// karena keduanya harus lolos, yang paling ketat jadi bottleneck.
-			d.mu.RLock()
-			lim, glim := d.limiter, d.globalLim
-			d.mu.RUnlock()
+			lim, glim := d.limiter.Load(), d.globalLim.Load()
 			if glim != nil {
 				if werr := glim.Wait(ctx, int(n)); werr != nil {
 					return werr

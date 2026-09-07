@@ -61,8 +61,7 @@ func (m *Manager) TryStart(id int64) (started bool, err error) {
 
 	if len(m.active) < m.maxConcurrent {
 		m.active[id] = struct{}{}
-		m.state.UpdateDownloadStatus(id, "downloading") //nolint:errcheck
-		m.state.SetQueuePosition(id, nil)               //nolint:errcheck
+		m.state.MarkDownloading(id) //nolint:errcheck
 		go m.startFn(id)
 		return true, nil
 	}
@@ -101,8 +100,7 @@ func (m *Manager) EnqueueScheduled(id int64) error {
 	}
 	if len(m.active) < m.maxConcurrent {
 		m.active[id] = struct{}{}
-		m.state.UpdateDownloadStatus(id, "downloading") //nolint:errcheck
-		m.state.SetQueuePosition(id, nil)               //nolint:errcheck
+		m.state.MarkDownloading(id) //nolint:errcheck
 		go m.startFn(id)
 		return nil
 	}
@@ -148,19 +146,7 @@ func (m *Manager) enqueue(id int64) error {
 	if rec.Status == "queued" && rec.QueuePosition.Valid {
 		return nil
 	}
-	row := m.state.DB().QueryRow(
-		`SELECT COALESCE(MAX(queue_position), 0) FROM downloads
-		  WHERE status = 'queued' AND deleted_at IS NULL`,
-	)
-	var maxPos int64
-	if err := row.Scan(&maxPos); err != nil {
-		return err
-	}
-	pos := maxPos + 1
-	if err := m.state.SetQueuePosition(id, &pos); err != nil {
-		return err
-	}
-	return m.state.UpdateDownloadStatus(id, "queued")
+	return m.state.EnqueueDownload(id)
 }
 
 // drainQueue starts queued downloads while slots are available.
@@ -185,8 +171,7 @@ func (m *Manager) drainQueue() {
 			continue
 		}
 		m.active[next.ID] = struct{}{}
-		m.state.UpdateDownloadStatus(next.ID, "downloading") //nolint:errcheck
-		m.state.SetQueuePosition(next.ID, nil)               //nolint:errcheck
+		m.state.MarkDownloading(next.ID) //nolint:errcheck
 		go m.startFn(next.ID)
 	}
 }

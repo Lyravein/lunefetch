@@ -297,8 +297,9 @@ func (dp *DownloadsPage) Refresh() {
 	}
 	dp.mu.RUnlock()
 
-	dp.table.SetRecords(records)
-	dp.table.SetSpeeds(speeds)
+	// Single table update: SetRecords + SetSpeeds each trigger a list
+	// refresh, so doing both doubled the render work on every tick.
+	dp.table.SetData(records, speeds)
 	// Swap between empty state and table.
 	fyne.Do(func() {
 		if len(records) == 0 {

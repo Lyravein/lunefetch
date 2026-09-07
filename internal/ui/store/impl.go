@@ -101,6 +101,26 @@ func (s *DownloadStore) Selected() *storage.DownloadRecord {
 	return nil
 }
 
+// All returns a copy of all loaded records regardless of active filters.
+func (s *DownloadStore) All() []storage.DownloadRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]storage.DownloadRecord, len(s.all))
+	copy(out, s.all)
+	return out
+}
+
+// StatusCounts returns the count of downloads per status across all records.
+func (s *DownloadStore) StatusCounts() (map[string]int, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	counts := make(map[string]int)
+	for i := range s.all {
+		counts[s.all[i].Status]++
+	}
+	return counts, len(s.all)
+}
+
 // --- View state ---
 
 func (s *DownloadStore) SetFilter(status DownloadStatus) {
@@ -221,12 +241,21 @@ func (s *DownloadStore) rebuild() {
 	// Sort.
 	col := s.sortCol
 	asc := s.sortAsc
+	// Cache lowercased names once: calling ToLower inside the comparator
+	// allocates on every comparison (O(N log N) strings per rebuild).
+	var lowerNames map[*storage.DownloadRecord]string
+	if col == ColName {
+		lowerNames = make(map[*storage.DownloadRecord]string, len(filtered))
+		for _, r := range filtered {
+			lowerNames[r] = strings.ToLower(r.Filename)
+		}
+	}
 	sort.SliceStable(filtered, func(i, j int) bool {
 		a, b := filtered[i], filtered[j]
 		comparison := 0
 		switch col {
 		case ColName:
-			comparison = strings.Compare(strings.ToLower(a.Filename), strings.ToLower(b.Filename))
+			comparison = strings.Compare(lowerNames[a], lowerNames[b])
 		case ColSize:
 			comparison = compareInt64(a.TotalSize, b.TotalSize)
 		case ColProgress:

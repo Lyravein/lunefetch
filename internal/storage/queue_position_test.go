@@ -235,6 +235,42 @@ func TestResetProgressFailsForUnknownDownload(t *testing.T) {
 	}
 }
 
+func TestEnqueueDownloadAssignsNextPosition(t *testing.T) {
+	sm := newQueueState(t)
+	first := newQueuedRow(t, sm, "first.bin", 1)
+	second := newQueuedRow(t, sm, "second.bin", 2)
+	third, err := sm.CreateDownloadWithChunks("https://example.com/third.bin", "third.bin", t.TempDir(), "Other", 10, true, []int64{0}, []int64{9}, "", "")
+	if err != nil {
+		t.Fatalf("create third download: %v", err)
+	}
+	if err := sm.EnqueueDownload(third); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if got := positionOf(t, sm, third); got != 3 {
+		t.Fatalf("third position = %d, want 3", got)
+	}
+	for _, id := range []int64{first, second} {
+		if got := positionOf(t, sm, id); got < 1 || got > 3 {
+			t.Fatalf("existing position for %d = %d, want 1..3", id, got)
+		}
+	}
+}
+
+func TestMarkDownloadingClearsQueuePosition(t *testing.T) {
+	sm := newQueueState(t)
+	id := newQueuedRow(t, sm, "queued.bin", 1)
+	if err := sm.MarkDownloading(id); err != nil {
+		t.Fatalf("mark downloading: %v", err)
+	}
+	rec, err := sm.GetDownload(id)
+	if err != nil {
+		t.Fatalf("get download: %v", err)
+	}
+	if rec.Status != "downloading" || rec.QueuePosition.Valid {
+		t.Fatalf("record = status %q, queue position valid=%v; want downloading, NULL", rec.Status, rec.QueuePosition.Valid)
+	}
+}
+
 func TestResetProgressFailsForDeletedDownload(t *testing.T) {
 	sm := newQueueState(t)
 	id := newQueuedRow(t, sm, "gone.zip", 1)

@@ -165,6 +165,19 @@ func (sm *StateManager) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
 	CREATE INDEX IF NOT EXISTS idx_downloads_queue_position ON downloads(queue_position);
 	CREATE INDEX IF NOT EXISTS idx_downloads_deleted_at ON downloads(deleted_at);
+	CREATE INDEX IF NOT EXISTS idx_downloads_active_queue
+		ON downloads(queue_position, created_at)
+		WHERE status = 'queued' AND deleted_at IS NULL;
+
+	CREATE TRIGGER IF NOT EXISTS trg_chunks_progress_downloads
+	AFTER UPDATE OF downloaded_size ON chunks
+	BEGIN
+		UPDATE downloads SET downloaded_size = (
+			SELECT COALESCE(SUM(downloaded_size), 0)
+			FROM chunks WHERE download_id = NEW.download_id
+		), updated_at = CURRENT_TIMESTAMP
+		WHERE id = NEW.download_id;
+	END;
 	`
 
 	if _, err := sm.db.Exec(schema); err != nil {
@@ -296,12 +309,11 @@ func (sm *StateManager) CreateChunks(downloadID int64, startBytes, endBytes []in
 }
 
 func (sm *StateManager) UpdateChunkProgress(downloadID int64, chunkIndex int, downloadedSize int64, status string) error {
-	tx, err := sm.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	_, err = tx.Exec(
+	// Single write: trg_chunks_progress_downloads keeps downloads.downloaded_size
+	// in sync via SUM(chunks) in the same implicit transaction. The old version
+	// ran two writes in an explicit transaction, doubling write contention on
+	// the single SQLite connection on every per-second progress tick.
+	_, err := sm.db.Exec(
 		`UPDATE chunks SET downloaded_size = ?, status = ?, updated_at = CURRENT_TIMESTAMP
 		 WHERE download_id = ? AND chunk_index = ?`,
 		downloadedSize, status, downloadID, chunkIndex,
@@ -309,17 +321,7 @@ func (sm *StateManager) UpdateChunkProgress(downloadID int64, chunkIndex int, do
 	if err != nil {
 		return fmt.Errorf("update chunk: %w", err)
 	}
-
-	_, err = tx.Exec(
-		`UPDATE downloads SET downloaded_size = (
-			SELECT COALESCE(SUM(downloaded_size), 0) FROM chunks WHERE download_id = ?
-		), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		downloadID, downloadID,
-	)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 // ReconcileInterrupted marks workers lost during a prior process exit as
@@ -404,6 +406,43 @@ func (sm *StateManager) SetQueuePosition(id int64, pos *int64) error {
 	_, err := sm.db.Exec(
 		`UPDATE downloads SET queue_position = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
 		pos, id,
+	)
+	return err
+}
+
+// EnqueueDownload atomically moves a download into the queue: status becomes
+// "queued" and its queue_position is set to the lowest free position after the
+// current max. The two writes the queue manager used to do (SetQueuePosition +
+// UpdateDownloadStatus) collapse into one UPDATE, and the position is computed
+// by SQLite itself, so two concurrent callers always get distinct positions
+// without a Go-side mutex dance.
+func (sm *StateManager) EnqueueDownload(id int64) error {
+	_, err := sm.db.Exec(
+		`UPDATE downloads
+		 SET status = 'queued',
+		     queue_position = (
+		         SELECT COALESCE(MAX(queue_position), 0) + 1
+		         FROM downloads
+		         WHERE status = 'queued' AND deleted_at IS NULL
+		     ),
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ? AND deleted_at IS NULL`,
+		id,
+	)
+	return err
+}
+
+// MarkDownloading atomically clears a queued download's queue_position and
+// promotes it to "downloading". One UPDATE replaces the two writes the queue
+// manager used to perform (UpdateDownloadStatus + SetQueuePosition(nil)).
+func (sm *StateManager) MarkDownloading(id int64) error {
+	_, err := sm.db.Exec(
+		`UPDATE downloads
+		 SET status = 'downloading',
+		     queue_position = NULL,
+		     updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?`,
+		id,
 	)
 	return err
 }

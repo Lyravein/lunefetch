@@ -325,18 +325,14 @@ func (a *App) refreshLoop() {
 		a.st.Load() //nolint:errcheck
 		a.downloads.Refresh()
 
-		// Update status summaries from all records (unfiltered).
-		allRecords, _ := a.sm.ListDownloads()
-		counts := make(map[string]int)
-		for i := range allRecords {
-			counts[allRecords[i].Status]++
-		}
+		// Update status summaries from the already-loaded store snapshot
+		// (avoids a second full ListDownloads query every tick).
+		counts, totalCount := a.st.StatusCounts()
 		a.summaries.Update(counts)
 
 		// Update status bar.
 		totalSpeed := a.downloads.SpeedTotal()
 		activeCount := a.downloads.ActiveCount()
-		totalCount := len(allRecords)
 		a.statusBar.Update(totalSpeed, activeCount, totalCount)
 
 		// Persist window size when it changes.

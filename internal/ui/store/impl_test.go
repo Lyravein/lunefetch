@@ -85,3 +85,64 @@ func TestFilterCategoryAndSearchCompose(t *testing.T) {
 		t.Fatalf("UI All category returned %d records, want 2", len(got))
 	}
 }
+
+func TestAllReturnsUnfilteredRecords(t *testing.T) {
+	sm, s := newTestStore(t)
+	first, err := sm.CreateDownload("https://example.com/1", "alpha.bin", t.TempDir(), "", 10, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.CreateDownload("https://example.com/2", "beta.bin", t.TempDir(), "", 10, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	s.SetFilter(StatusDownloading) // no matches; view is empty
+
+	all := s.All()
+	if len(all) != 2 {
+		t.Fatalf("All() returned %d records, want 2 (filter must not apply)", len(all))
+	}
+	if all[0].ID != first {
+		t.Fatalf("All() order = [%d, %d], want %d first", all[0].ID, all[1].ID, first)
+	}
+}
+
+func TestStatusCounts(t *testing.T) {
+	sm, s := newTestStore(t)
+	a, err := sm.CreateDownload("https://example.com/a", "a.bin", t.TempDir(), "", 10, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.UpdateDownloadStatus(a, "completed"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := sm.CreateDownload("https://example.com/b", "b.bin", t.TempDir(), "", 10, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.UpdateDownloadStatus(b, "downloading"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sm.CreateDownload("https://example.com/c", "c.bin", t.TempDir(), "", 10, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	counts, total := s.StatusCounts()
+	if total != 3 {
+		t.Fatalf("StatusCounts total = %d, want 3", total)
+	}
+	if counts["completed"] != 1 {
+		t.Fatalf("completed count = %d, want 1", counts["completed"])
+	}
+	if counts["downloading"] != 1 {
+		t.Fatalf("downloading count = %d, want 1", counts["downloading"])
+	}
+	if counts["pending"] != 1 {
+		t.Fatalf("pending count = %d, want 1", counts["pending"])
+	}
+}

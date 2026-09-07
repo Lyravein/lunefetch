@@ -51,7 +51,11 @@ func NewStatusBar(cfg *config.Config, qm *queue.Manager) *StatusBar {
 func (sb *StatusBar) Container() fyne.CanvasObject { return sb.bar }
 
 func (sb *StatusBar) Update(totalSpeed float64, _ int, _ int) {
+	text := fmt.Sprintf("Overall Speed: %s/s", FormatSize(int64(totalSpeed)))
 	fyne.Do(func() {
-		sb.speed.SetText(fmt.Sprintf("Overall Speed: %s/s", FormatSize(int64(totalSpeed))))
+		if sb.speed.Text == text {
+			return
+		}
+		sb.speed.SetText(text)
 	})
 }
